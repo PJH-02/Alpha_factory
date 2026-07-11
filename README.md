@@ -13,9 +13,12 @@
 
 다음 그림은 Alpha Foundry의 실행 구조와 데이터 흐름을 한 장으로 요약한다. 실선은 코드가 수행하는 결정론 처리이며, 점선은 LLM 호출 구간이다. LLM은 질문·가설·설명 초안 생성에만 관여하고, 상태 전이·수치 계산·검증·영속 저장은 코드 영역에서만 수행한다.
 
-![Alpha Foundry 전체 구조](./docs/diagram/alpha_foundry_overview.svg)
+<a href="./docs/diagram/alpha_foundry_overview.svg">
+  <img src="./docs/diagram/alpha_foundry_overview.svg" alt="Alpha Foundry 전체 구조" width="100%">
+</a>
 
 Mermaid 원본: [alpha_foundry_overview.mmd](./docs/diagram/alpha_foundry_overview.mmd)
+
 
 ## 2. 확정 문서 구조
 
