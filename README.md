@@ -6,12 +6,12 @@
 
 아래 이미지를 누르면 SVG 원본을 새 탭에서 크게 볼 수 있다.
 
-<a href="./diagrams/alpha_foundry_overview.svg">
-  <img src="./diagrams/alpha_foundry_overview.svg" alt="Alpha Foundry 전체 구조" width="100%">
+<a href="./docs/diagrams/alpha_foundry_overview.svg">
+  <img src="./docs/diagrams/alpha_foundry_overview.svg" alt="Alpha Foundry 전체 구조" width="100%">
 </a>
 
-- Mermaid 원본: [alpha_foundry_overview.mmd](./diagrams/alpha_foundry_overview.mmd)
-- SVG 이미지: [alpha_foundry_overview.svg](./diagrams/alpha_foundry_overview.svg)
+- Mermaid 원본: [alpha_foundry_overview.mmd](./docs/diagrams/alpha_foundry_overview.mmd)
+- SVG 이미지: [alpha_foundry_overview.svg](./docs/diagrams/alpha_foundry_overview.svg)
 
 다이어그램 해석 규칙:
 
