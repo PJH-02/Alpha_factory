@@ -1,48 +1,36 @@
-# ADR-0007: PostgreSQL lease 기반 영속 비동기 job과 transactional outbox를 사용한다
+# ADR-0007: MVP는 영속 단일 Worker job queue를 사용한다
 
-| 항목 | 값 |
-|---|---|
-| 상태 | Accepted |
-| 결정일 | 2026-07-11 |
-| 관련 요구사항 | FR-071~076, NFR-004~007, NFR-017~018 |
+- 상태: Accepted
+- 결정일: 2026-07-11
+- 범위: MVP
 
 ## Context
 
-질문 생성, backtest, validation, report는 HTTP request lifetime을 넘는다. Process memory queue는 재시작 시 작업과 lineage를 잃고 sync API는 timeout과 중복 재요청을 유발한다. 초기 규모에서 별도 broker/workflow platform은 DB aggregate와 job 상태의 이중 기록 문제를 만든다.
+LLM과 engine 실행은 HTTP 요청보다 길고 process 재시작 후 상태 조회가 필요하다. 그러나 MVP에서 다중 Worker lease, broker, transactional outbox까지 구현하면 복구 모델이 불필요하게 복잡해진다.
 
 ## Decision
 
-- API는 장시간 command를 `jobs`에 기록하고 202를 반환한다.
-- Worker는 `FOR UPDATE SKIP LOCKED`로 claim하고 60초 lease, 15초 heartbeat를 사용한다.
-- transient infrastructure failure만 최대 3회 재시도한다.
-- side effect는 idempotency key, fingerprint, content hash, aggregate version으로 deduplicate한다.
-- business state와 integration event는 같은 transaction의 outbox row로 기록한다.
-- outbox 전달은 at-least-once이며 consumer가 event ID로 deduplicate한다.
+HTTP/CLI command는 SQLite `jobs`에 기록하고 job ID를 반환한다. process당 Worker 하나가 가장 오래된 QUEUED job을 RUNNING으로 전이해 실행한다. process 시작 시 RUNNING job을 QUEUED로 복구한다. 완료 experiment fingerprint와 artifact commit이 중복 실행을 막는다. sealed access는 복구하지 않는다.
 
 ## 고려한 대안
 
-| 대안 | 기각 이유 |
-|---|---|
-| synchronous HTTP | timeout, retry 중복, progress/recovery 부재 |
-| in-memory/background task | process 종료 시 유실, scale-out claim 불가 |
-| Celery/Redis | broker·result backend·DB 상태의 3중 의미와 운영 복잡도 |
-| 외부 workflow engine | 초기 범위에 비해 contract·deployment 비용 과다 |
+| 대안 | 채택하지 않은 이유 |
+| --- | --- |
+| 요청 thread에서 동기 실행 | timeout과 재시작 조회 요구를 충족하지 못함 |
+| Redis/Celery | 추가 인프라와 두 저장소 일관성 필요 |
+| PostgreSQL lease/outbox | 다중 Worker가 없는 MVP에 과도함 |
 
 ## Consequences
 
-- PostgreSQL queue 부하를 모니터링하고 partial index/retention을 관리해야 한다.
-- exactly-once 전달을 주장하지 않으며 모든 handler가 idempotent해야 한다.
-- CPU engine은 job coordinator와 별도 subprocess로 격리한다.
-- DB 장애 시 새 작업은 중단되지만 committed job과 상태는 보존된다.
+- 긍정: API는 즉시 응답하고 작업은 재시작 후 조회 가능하다.
+- 긍정: queue 상태와 domain 상태가 한 DB에 있다.
+- 부정: 한 시점에 한 job만 실행한다.
+- 부정: 장기 실행 job이 뒤 작업을 지연할 수 있다.
 
 ## 강제 방법
 
-- concurrent claim/lease recovery/process-kill tests
-- state+outbox atomic rollback test
-- duplicate event 100회 test
-- retryable error taxonomy contract
+단일 Worker lock, job transition test, startup recovery test, idempotency key와 experiment fingerprint를 사용한다.
 
 ## 재검토 조건
 
-queue throughput, scheduling 기능, multi-day DAG가 PostgreSQL SLO를 넘으면 broker/workflow engine 분리를 검토한다. 분리 후에도 authoritative job/holdout/ledger state는 PostgreSQL이고 outbox bridge를 사용한다.
-
+queue 대기 p95가 5분을 넘거나 독립 job 2개 이상을 병렬 실행해야 하면 Beta B1에서 PostgreSQL lease 기반 다중 Worker를 도입한다. lease, heartbeat, idempotent side effect, 장애 주입 test가 모두 통과하기 전에는 Worker 수를 늘리지 않는다.

@@ -1,48 +1,35 @@
-# ADR-0006: 모든 탐색을 계보화하고 sealed holdout을 계보당 한 번만 허용한다
+# ADR-0006: 탐색을 계보화하고 sealed holdout을 계보당 한 번만 허용한다
 
-| 항목 | 값 |
-|---|---|
-| 상태 | Accepted |
-| 결정일 | 2026-07-11 |
-| 관련 요구사항 | FR-037~038, FR-054~065, NFR-001~003, NFR-018~019 |
+- 상태: Accepted
+- 결정일: 2026-07-11
 
 ## Context
 
-질문, prompt, feature, window, 비용, 기간, engine을 바꾸며 validation/holdout을 반복하면 nominal OOS도 사실상 training data가 된다. 이름 변경이나 새 strategy ID만으로 같은 탐색을 숨길 수 있다. 최종 수치를 생성기에 노출하면 선택 편향과 backtest overfitting을 통제할 수 없다.
+후보를 반복 평가하고 좋은 결과만 선택하면 holdout도 사실상 학습 데이터가 된다. 단순 experiment ID만으로는 어떤 수정이 어떤 결과를 보고 이뤄졌는지 추적할 수 없다.
 
 ## Decision
 
-- mandate root에서 question, hypothesis, strategy, experiment로 이어지는 `lineage_id`를 보존한다.
-- 연구 결과에 영향을 줄 수 있는 모든 변경을 append-only `search_event`로 기록하고 예산을 차감한다.
-- train은 상세 feedback, validation은 coarse generator feedback, sealed는 generator 접근 금지다.
-- G0~G8 통과, strategy/config freeze, Human Reviewer 승인 후 lineage당 sealed access를 정확히 한 번 허용한다.
-- access 예약 시점에 소비하며 job 실패·취소로 되돌리지 않는다. 같은 access-bound job만 재개할 수 있다.
-- sealed 결과 이후 같은 lineage 수정과 재평가를 금지한다. 새 연구는 새 root mandate와 별도 holdout 정책으로 시작한다.
+모든 Mandate는 lineage ID를 가진다. 질문·가설·전략 revision과 실험·탈락은 append-only search event로 연결한다. sealed holdout access는 Reviewer 승인 후 lineage당 한 번 transaction으로 예약한다. 실행이 중단되어도 access를 되돌리지 않는다. LLM과 후속 후보 생성에는 sealed 상세를 제공하지 않는다.
 
 ## 고려한 대안
 
-| 대안 | 기각 이유 |
-|---|---|
-| holdout 반복 후 Bonferroni 보정 | 적응적 변경·prompt 탐색을 완전히 복원하지 못함 |
-| rolling OOS만 사용하고 sealed 없음 | 최종 선택 과정의 누적 피드백 통제 부족 |
-| strategy ID별 1회 | 이름 변경으로 우회 가능 |
-| 결과를 연구자·generator 모두 완전 은폐 | 연구 검토와 사람 승인에 필요한 evidence 부족 |
+| 대안 | 채택하지 않은 이유 |
+| --- | --- |
+| 사용자 주의에 의존 | 자동화된 반복 탐색을 막을 수 없음 |
+| experiment당 1회 | 새 experiment ID로 우회 가능 |
+| 실패 시 access 복원 | 결과 일부 노출 여부를 증명하기 어려움 |
 
 ## Consequences
 
-- 연구 속도보다 최종 검증의 독립성을 우선한다.
-- infrastructure 실패도 access budget을 소모하므로 sealed 실행 전 preflight와 운영 안정성이 중요하다.
-- 여러 아이디어를 독립 holdout으로 평가하려면 처음부터 별도 mandate와 계보가 필요하다.
-- 감사자는 prompt/model/config 변화와 metric exposure를 재구성할 수 있다.
+- 긍정: 선택 편향과 holdout 오염을 감사할 수 있다.
+- 긍정: 실패 연구도 재사용 가능한 기억이 된다.
+- 부정: 실수나 장애로 소비한 holdout을 같은 lineage에서 복구할 수 없다.
+- 부정: 새 lineage 생성 사유를 사람이 검토해야 한다.
 
 ## 강제 방법
 
-- `(tenant_id,lineage_id)` unique holdout constraint
-- lineage row lock과 irreversible sealed state
-- alias/name/content duplicate tests
-- sealed DB role, feedback view, concurrent access red team
+`holdout_accesses.lineage_id` UNIQUE, `BEGIN IMMEDIATE` 예약, append-only search event, sealed redaction test를 사용한다.
 
 ## 재검토 조건
 
-새 데이터가 시간 경과로 축적돼 기존 연구 당시 존재하지 않은 완전히 새로운 holdout period가 생기면 새 root mandate로 재검증할 수 있다. 기존 holdout 재개방은 허용하지 않는다.
-
+1회 제한은 완화하지 않는다. 여러 독립 holdout이 필요하면 dataset 준비 단계에서 목적과 selector를 분리하고 별도 사전 등록 lineage 정책을 새 ADR로 정의한다.

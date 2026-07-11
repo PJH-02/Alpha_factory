@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1460" viewBox="0 0 1200 1460" role="img" aria-labelledby="title desc">
+  <title id="title">Alpha Foundry 전체 구조</title>
+  <desc id="desc">API와 CLI에서 Research Orchestrator를 거쳐 Knowledge와 Capability, Domain Router, Lab Registry, Experiment Compiler, Engine, Validation, Strategy 또는 Rejection Registry로 흐른다. LLM은 Orchestrator가 호출하는 별도 후보 생성 영역이다.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#d97706"/>
+    </marker>
+    <style>
+      .area-code { fill:#f8fbff; stroke:#2563eb; stroke-width:3; }
+      .area-ai { fill:#fffaf0; stroke:#d97706; stroke-width:3; }
+      .context { fill:#ffffff; stroke:#94a3b8; stroke-width:2; stroke-dasharray:7 6; }
+      .node-code { fill:#e8f1ff; stroke:#2563eb; stroke-width:2; }
+      .node-ai { fill:#fff4d6; stroke:#d97706; stroke-width:2; }
+      .node-entry { fill:#f8fafc; stroke:#475569; stroke-width:2; }
+      .flow { fill:none; stroke:#334155; stroke-width:2.5; marker-end:url(#arrow); }
+      .llm-flow { fill:none; stroke:#d97706; stroke-width:2.5; stroke-dasharray:8 7; marker-end:url(#arrow-orange); }
+      .title { font:700 23px "Segoe UI","Noto Sans KR","Malgun Gothic",Arial,sans-serif; fill:#0f172a; }
+      .area-label { font:700 20px "Segoe UI","Noto Sans KR","Malgun Gothic",Arial,sans-serif; letter-spacing:1px; fill:#0f172a; }
+      .node-title { font:700 21px "Segoe UI","Noto Sans KR","Malgun Gothic",Arial,sans-serif; fill:#111827; text-anchor:middle; }
+      .node-title-small { font:700 18px "Segoe UI","Noto Sans KR","Malgun Gothic",Arial,sans-serif; fill:#111827; text-anchor:middle; }
+      .node-body { font:400 17px "Segoe UI","Noto Sans KR","Malgun Gothic",Arial,sans-serif; fill:#334155; text-anchor:middle; }
+      .edge-label { font:600 16px "Segoe UI","Noto Sans KR","Malgun Gothic",Arial,sans-serif; fill:#9a5a05; text-anchor:middle; }
+    </style>
+  </defs>
+
+  <rect x="410" y="25" width="380" height="70" rx="12" class="node-entry"/>
+  <text x="600" y="69" class="title" text-anchor="middle">API / CLI</text>
+
+  <rect x="30" y="130" width="820" height="1280" rx="18" class="area-code"/>
+  <text x="60" y="170" class="area-label">CODE AREA</text>
+
+  <rect x="890" y="205" width="280" height="245" rx="18" class="area-ai"/>
+  <text x="920" y="245" class="area-label">LLM AREA</text>
+
+  <rect x="180" y="205" width="520" height="90" rx="12" class="node-code"/>
+  <text x="440" y="242" class="node-title">Research Orchestrator</text>
+  <text x="440" y="272" class="node-body">상태 · 예산 · DAG · 승인</text>
+
+  <rect x="110" y="350" width="660" height="235" rx="14" class="context"/>
+  <text x="135" y="385" class="area-label">RESEARCH CONTEXT</text>
+
+  <rect x="140" y="410" width="280" height="125" rx="12" class="node-code"/>
+  <text x="280" y="447" class="node-title">Knowledge Plane</text>
+  <text x="280" y="478" class="node-body">원문 · 주장 · 반대근거</text>
+  <text x="280" y="505" class="node-body">실패기억</text>
+
+  <rect x="460" y="410" width="280" height="125" rx="12" class="node-code"/>
+  <text x="600" y="447" class="node-title">Capability Plane</text>
+  <text x="600" y="478" class="node-body">데이터 · 엔진</text>
+  <text x="600" y="505" class="node-body">Config</text>
+
+  <rect x="250" y="630" width="380" height="70" rx="12" class="node-code"/>
+  <text x="440" y="673" class="node-title">Domain Router</text>
+
+  <rect x="150" y="755" width="580" height="115" rx="12" class="node-code"/>
+  <text x="440" y="790" class="node-title">Lab Registry</text>
+  <text x="440" y="821" class="node-body">Factor · StatArb · MM · Flow</text>
+  <text x="440" y="848" class="node-body">CrossVenue · Derivative · Event · TS</text>
+
+  <rect x="250" y="925" width="380" height="70" rx="12" class="node-code"/>
+  <text x="440" y="968" class="node-title">Experiment Compiler</text>
+
+  <rect x="150" y="1050" width="580" height="100" rx="12" class="node-code"/>
+  <text x="440" y="1087" class="node-title">Engine Registry</text>
+  <text x="440" y="1119" class="node-body">Panel · MultiLeg · LOB · Event · MultiVenue</text>
+
+  <rect x="250" y="1200" width="380" height="70" rx="12" class="node-code"/>
+  <text x="440" y="1243" class="node-title">Validation Registry</text>
+
+  <rect x="185" y="1320" width="510" height="70" rx="12" class="node-code"/>
+  <text x="440" y="1363" class="node-title">Strategy / Rejection Registry</text>
+
+  <rect x="920" y="280" width="220" height="115" rx="12" class="node-ai"/>
+  <text x="1030" y="317" class="node-title-small">Research Generator</text>
+  <text x="1030" y="348" class="node-body">질문 · 가설</text>
+  <text x="1030" y="375" class="node-body">전략 후보</text>
+
+  <path d="M600 95 L600 175 L440 175 L440 205" class="flow"/>
+  <path d="M380 295 L380 330 L280 330 L280 410" class="flow"/>
+  <path d="M500 295 L500 330 L600 330 L600 410" class="flow"/>
+  <path d="M280 535 L280 605 L400 605 L400 630" class="flow"/>
+  <path d="M600 535 L600 605 L480 605 L480 630" class="flow"/>
+  <path d="M440 700 L440 755" class="flow"/>
+  <path d="M440 870 L440 925" class="flow"/>
+  <path d="M440 995 L440 1050" class="flow"/>
+  <path d="M440 1150 L440 1200" class="flow"/>
+  <path d="M440 1270 L440 1320" class="flow"/>
+
+  <path d="M700 230 C790 230, 830 285, 920 305" class="llm-flow"/>
+  <text x="812" y="239" class="edge-label">제약 포함 요청</text>
+  <path d="M920 370 C830 405, 790 285, 700 270" class="llm-flow"/>
+  <text x="815" y="390" class="edge-label">구조화 후보</text>
+</svg>

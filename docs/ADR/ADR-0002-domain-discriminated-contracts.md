@@ -1,49 +1,35 @@
 # ADR-0002: 공통 외피와 도메인 판별형 계약을 사용한다
 
-| 항목 | 값 |
-|---|---|
-| 상태 | Accepted |
-| 결정일 | 2026-07-11 |
-| 관련 요구사항 | FR-016~033, NFR-014~015 |
+- 상태: Accepted
+- 결정일: 2026-07-11
 
 ## Context
 
-팩터는 자산별 score와 portfolio mapping을, StatArb는 관계·hedge·spread를, MM은 order book·queue·inventory를 연구한다. 공통 필드의 거대한 schema는 어떤 도메인에도 정확하지 않고 다수 nullable field와 해석 분기를 만든다. 완전 별도 API는 provenance, budget, evidence, 상태, audit를 중복시킨다.
+Factor, StatArb, Market Making 등은 연구 객체와 필수 입력이 다르다. 하나의 model에 모든 field를 optional로 추가하면 유효한 조합을 판정하기 어렵고 Factor 관점이 다른 도메인을 왜곡한다.
 
 ## Decision
 
-`ResearchQuestion`, `HypothesisSpec`, `StrategySpec`은 공통 외피와 `domain` discriminator가 선택하는 strict payload union으로 정의한다.
-
-- Built-in domain은 8개다.
-- 공통 외피는 ID, lineage, evidence, assumption, falsifier, data/engine requirement, budget, provenance만 소유한다.
-- 각 lab은 question/hypothesis/strategy payload, audit rule, memory schema를 독립 소유한다.
-- `additionalProperties=false`와 schema version을 강제한다.
-- domain과 payload, engine, validator, memory가 다르면 compile/run 이전에 실패한다.
+Question과 Strategy는 ID, provenance, 가정, 반증 조건, 데이터 요구, 예산, 계보만 공통 외피로 공유한다. 본문은 `domain/type` discriminator가 있는 8개 독립 payload union으로 정의한다. 각 Lab이 자신의 payload schema와 validation을 소유한다.
 
 ## 고려한 대안
 
-| 대안 | 기각 이유 |
-|---|---|
-| 모든 field를 가진 universal schema | nullable 의미, 도메인 오용, validation 복잡도 증가 |
-| 자유 형식 JSON payload | AI와 plugin이 숨은 필드·기본값을 발명할 수 있음 |
-| 도메인별 완전 별도 시스템 | 공통 lineage·budget·holdout·report가 중복되고 결합 통제가 약해짐 |
-| Factor AST를 모든 전략에 확장 | queue, multi-leg, cashflow, event state를 표현하지 못함 |
+| 대안 | 채택하지 않은 이유 |
+| --- | --- |
+| 범용 optional schema | 잘못된 field 조합과 의미 없는 null이 증가 |
+| 모든 전략을 단일 AST로 표현 | 공식형 Factor 외 도메인의 상태와 사건을 손실 |
+| schema 없는 dict | AI와 사람 사이의 구현 계약이 검증 불가능 |
 
 ## Consequences
 
-- 새 domain 추가는 schema, lab, engine profile, validator, fixture를 모두 요구한다.
-- 공통 기능은 domain payload를 해석하지 않고 discriminator와 공통 외피만 다룬다.
-- schema migration 수가 늘지만 잘못된 공통 추상화보다 국소적이다.
-- AI context는 대상 domain schema만 포함해 작고 명확하게 유지된다.
+- 긍정: domain별 필수 field와 진화가 명확하다.
+- 긍정: AI 출력과 plugin을 동일 JSON Schema로 검증한다.
+- 부정: 공통 처리 전에 union 분기가 필요하다.
+- 부정: domain 추가 시 schema·plugin·contract fixture를 함께 추가해야 한다.
 
 ## 강제 방법
 
-- 8개 valid/invalid union contract test
-- cross-domain payload swap test
-- plugin registration compatibility check
-- import-linter와 registry domain equality check
+Pydantic discriminated union, `extra="forbid"`, 8개 Lab parameterized contract test를 사용한다.
 
 ## 재검토 조건
 
-두 domain에서 payload field와 validation 의미가 90% 이상 동일하고 3개 release 동안 독립 변화가 없을 때만 공통 subtype 추출을 검토한다. 단순 이름 유사성은 근거가 아니다.
-
+서로 다른 세 개 이상 domain에서 의미와 validation이 완전히 같은 field 집합이 반복될 때만 공통 value object로 승격한다. payload 통합은 허용하지 않는다.

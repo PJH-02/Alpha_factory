@@ -1,48 +1,36 @@
-# ADR-0005: PostgreSQL·Parquet·Blob의 역할을 분리하고 MVP부터 PostgreSQL을 사용한다
+# ADR-0005: MVP는 SQLite와 로컬 content-addressed artifact를 사용한다
 
-| 항목 | 값 |
-|---|---|
-| 상태 | Accepted |
-| 결정일 | 2026-07-11 |
-| 관련 요구사항 | FR-037~044, FR-065~076, NFR-001, NFR-017~018 |
+- 상태: Accepted
+- 결정일: 2026-07-11
+- 대체 대상: 초기 PostgreSQL 우선 결정
 
 ## Context
 
-Alpha Foundry는 강한 transaction이 필요한 lineage·budget·holdout·job과 대규모 columnar scan이 필요한 시장 데이터·결과 series를 동시에 다룬다. 원 기획은 4일 동안 SQLite 사용 가능성을 열어 두었지만 SQLite는 `FOR UPDATE SKIP LOCKED`, RLS, PostgreSQL JSON/index/constraint, 다중 worker 의미를 재현하지 못한다. MVP와 Production의 영속 의미가 다르면 가장 중요한 concurrency test가 무효가 된다.
+MVP는 신뢰된 단일 조직, 단일 process, 작은 fixture에서 계약과 수치 흐름을 검증한다. 처음부터 PostgreSQL, object storage, RLS, partition을 도입하면 핵심 연구 흐름과 무관한 운영 작업이 커진다. 동시에 metadata와 큰 artifact의 저장 책임은 분리해야 한다.
 
 ## Decision
 
-- Metadata, state, lineage, job, audit는 MVP부터 PostgreSQL 16을 사용한다.
-- 시장·panel·result series는 immutable Parquet manifest로 저장한다.
-- report/model/diagnostic/Parquet part는 content-addressed Azure Blob에 저장한다.
-- code, static schema, static wiki는 Git에 저장한다.
-- shared mutable cache는 source of truth로 두지 않는다. immutable key의 process-local cache만 허용한다.
-- SQLite compatibility와 Redis 의존 job state를 제공하지 않는다.
+MVP metadata·상태·계보는 SQLite WAL에 저장한다. 결과·보고서·대형 배열은 SHA-256 기반 로컬 artifact 경로에 저장한다. application은 repository와 artifact port만 사용한다. Beta B1에서 동일 계약을 PostgreSQL과 object storage adapter로 교체한다.
 
 ## 고려한 대안
 
-| 대안 | 장점 | 기각 이유 |
-|---|---|---|
-| MVP SQLite → Production PostgreSQL | 초기 설치 단순 | transaction·locking·JSON·constraint가 달라 재작성과 false confidence 발생 |
-| 모든 데이터 PostgreSQL | 단일 저장소 | tick/panel/series scan과 storage cost, row bloat 부적합 |
-| 모든 metadata object store | 저렴·확장 | state transition, unique holdout, job claim의 원자성 부족 |
-| Redis queue/cache 필수 | 빠른 queue | 영속 audit와 DB 상태 이중화, 추가 복구 의미 |
+| 대안 | 채택하지 않은 이유 |
+| --- | --- |
+| MVP부터 PostgreSQL | 설치·운영 비용이 단일 writer 범위에 불필요 |
+| 모든 데이터를 SQLite BLOB | 대형 artifact dedup·검증·이동이 불편 |
+| 파일만 사용 | 상태 전이, FK, idempotency, query 무결성이 약함 |
 
 ## Consequences
 
-- local/CI에 PostgreSQL container가 필수다.
-- DB와 blob 사이 atomic transaction이 없으므로 content-addressed upload 후 metadata commit과 orphan cleanup이 필요하다.
-- Parquet schema/manifest versioning이 별도 계약이 된다.
-- MVP에서 concurrency와 migration을 Production과 같은 의미로 검증할 수 있다.
+- 긍정: 빈 환경 설치와 로컬 재현이 단순하다.
+- 긍정: metadata transaction과 artifact hash 역할이 명확하다.
+- 부정: 다중 writer와 대규모 query에 적합하지 않다.
+- 부정: Beta 전환 migration을 검증해야 한다.
 
 ## 강제 방법
 
-- SQLite driver/dependency 금지
-- Testcontainers PostgreSQL integration
-- artifact checksum/manifest tests
-- DB schema drift와 RLS tests
+SQLite 전용 코드는 infrastructure adapter에만 둔다. migration, backup, artifact atomic write test를 CI에 포함한다.
 
 ## 재검토 조건
 
-job enqueue가 지속 1,000건/s를 넘거나 DB queue가 metadata SLO를 20% 이상 악화시키면 별도 durable broker를 검토한다. 그래도 authoritative job state와 holdout은 PostgreSQL에 남기며 새 ADR이 필요하다.
-
+다중 Worker, 원격 사용자, DB 10GB 초과, write lock 대기 p95 100ms 초과 중 하나가 발생하면 PostgreSQL 전환을 실행한다. 전환 절차는 Database 문서 10절을 따른다.
