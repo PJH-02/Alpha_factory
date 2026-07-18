@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "static-gates-test-report",
+  "verdict": "passed",
+  "commands": [
+    "uv lock --check",
+    "npm ci",
+    "uv run --locked --no-sync ruff format --check .",
+    "uv run --locked --no-sync ruff check .",
+    "uv run --locked --no-sync mypy src",
+    "uv run --locked --no-sync python scripts/check_architecture.py",
+    "uv run --locked --no-sync python scripts/check_traceability.py",
+    "uv run --locked --no-sync python scripts/check_doc_contracts.py",
+    "uv run --locked --no-sync python scripts/check_openapi.py",
+    "uv run --locked --no-sync python scripts/check_mermaid_svg.py"
+  ],
+  "results": {
+    "format": "118 files already formatted",
+    "ruff": "passed",
+    "mypy": "56 source files, no issues",
+    "architecture": "passed",
+    "traceability": "passed",
+    "documentContracts": "passed",
+    "openapi": "passed",
+    "mermaid": "passed",
+    "locks": "passed"
+  }
+}

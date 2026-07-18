@@ -1,0 +1,102 @@
+[build-system]
+requires = ["hatchling>=1.26,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "alpha-foundry"
+version = "0.1.0"
+description = "Deterministic, research-grade strategy research platform."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115,<1.0",
+  "httpx>=0.28,<1.0",
+  "numpy>=2.1,<3.0",
+  "pandas>=2.2,<3.0",
+  "pyarrow>=18,<20",
+  "pydantic>=2.10,<3.0",
+  "scipy>=1.14,<2.0",
+  "uvicorn[standard]>=0.32,<1.0",
+]
+
+[project.scripts]
+alpha-foundry = "alpha_foundry.cli:main"
+
+[dependency-groups]
+dev = [
+  "editables>=0.5,<1.0",
+  "hypothesis>=6.120,<7.0",
+  "httpx2>=2.5,<3.0",
+  "mypy>=1.13,<2.0",
+  "pytest>=8.3,<9.0",
+  "pytest-cov>=6.0,<7.0",
+  "ruff>=0.8,<1.0",
+]
+
+[tool.hatch.build]
+dev-mode-exact = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/alpha_foundry"]
+
+[tool.hatch.build.targets.sdist]
+include = ["/README.md", "/src/alpha_foundry"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+  "E4",
+  "E7",
+  "E9",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "C4",
+  "PIE",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["alpha_foundry"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+plugins = ["pydantic.mypy"]
+strict = true
+warn_return_any = true
+warn_unreachable = true
+show_error_codes = true
+pretty = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-config --strict-markers"
+testpaths = ["tests"]
+xfail_strict = true
+markers = [
+  "release: recovery or performance checks that run only in the release suite",
+]
+
+[tool.coverage.run]
+branch = true
+parallel = true
+relative_files = true
+source = ["alpha_foundry"]
+
+[tool.coverage.report]
+fail_under = 85
+precision = 2
+show_missing = true
+skip_covered = true

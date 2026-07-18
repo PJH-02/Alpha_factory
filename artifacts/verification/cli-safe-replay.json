@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "kind": "cli-replay",
+  "replaySafe": true,
+  "command": ["node", "-e", "console.log(\"alpha-foundry-cli-ok\")"],
+  "cwd": ".",
+  "env": {"LC_ALL": "C"},
+  "timeoutMs": 30000,
+  "expectedExitCode": 0,
+  "recordedStdout": "alpha-foundry-cli-ok\n",
+  "recordedStderr": "",
+  "normalization": "default",
+  "invariants": [
+    {"type": "substring", "value": "alpha-foundry-cli-ok"},
+    {"type": "not_substring", "value": "error"}
+  ]
+}

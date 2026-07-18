@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "cross-os-test-report",
+  "verdict": "passed",
+  "windows": {
+    "runtime": "Windows 11 / CPython 3.12.2",
+    "artifact": "artifacts/verification/full-suite.xml",
+    "tests": 506,
+    "failures": 0,
+    "errors": 0,
+    "command": "uv run --locked --no-sync pytest -q --junitxml=artifacts/verification/full-suite.xml"
+  },
+  "linux": {
+    "runtime": "WSL2 Ubuntu / CPython 3.12.3",
+    "artifact": "artifacts/verification/full-suite-linux.xml",
+    "tests": 506,
+    "failures": 0,
+    "errors": 0,
+    "command": "UV_PROJECT_ENVIRONMENT=/tmp/alpha-foundry-wsl-venv uv run --locked --no-sync pytest -q --junitxml=artifacts/verification/full-suite-linux.xml"
+  },
+  "invariant": "The same locked source and 506-test suite pass on Windows and Linux; canonical/resource hashes are asserted exactly and numeric metric tolerances are asserted by the suite."
+}

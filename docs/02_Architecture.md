@@ -1,361 +1,162 @@
 # Alpha Foundry 아키텍처
 
 상태: Approved  
-범위: MVP 구조와 확장 경계
+범위: 구현 전 권위 경계와 불변 계약
+
+이 문서는 권위 상태·실행 순서·소유권의 아키텍처 계약이다. HTTP/CLI wire는 [04_API.md](./04_API.md), 영속 제약은 [05_Database.md](./05_Database.md), 구현 규칙은 [06_CodingGuidelines.md](./06_CodingGuidelines.md)를 따른다.
 
 ## 1. 설계 원칙
 
-1. 하나의 repository와 release를 갖는 모듈형 단일 애플리케이션으로 시작한다.
-2. 도메인 모델은 framework, DB, LLM SDK에 의존하지 않는다.
-3. LLM은 후보만 생성하며 상태 전이와 판정은 결정론적 코드가 수행한다.
-4. 질문·전략·엔진은 도메인별 계약을 사용한다.
-5. 모든 실험 입력은 실행 전에 immutable fingerprint로 고정한다.
-6. 세부 인프라는 port 뒤에 두어 MVP 구현을 불필요하게 확장하지 않는다.
+1. Python 모듈형 단일 애플리케이션, SQLite WAL, local CAS artifact와 지속 단일 worker를 사용한다.
+2. 결정론적 코드만 schema 검증, compiler, 예산, hash, 검색, 수치 실행, 검증, holdout, registry, publication과 상태 전이를 소유한다. LLM은 typed JSON 후보만 반환한다.
+3. 8개 Lab은 Factor, StatArb, Market Making, Structural Flow, Cross Venue, Derivatives, Event Fundamental, Time Series의 별도 typed DSL/compiler와 실제 연구급 수치 엔진을 제공한다. 공통화는 동일성이 입증된 primitive에 한정한다.
+4. 모든 의미 있는 resource는 immutable version과 AF-CANON digest로 고정한다. 수정은 새 resource/revision이며 이전 hash를 바꾸지 않는다.
+5. provider·engine·publication 같은 외부/복합 작업은 intent와 독점 소유권을 먼저 영속하고, terminal event와 authority 전이를 CAS로 기록한다.
+6. 후보 생성·검색·LLM 입력은 sealed selector, holdout metric, 상세 결과를 볼 수 없다. 사용자에게는 완전한 `PUBLISHED` aggregate만 보인다.
+7. API와 CLI는 같은 application service command/query를 호출한다. adapter가 business rule, hash 또는 상태 전이를 구현하지 않는다.
+8. cross-domain composition과 Meta Portfolio는 deferred다. 하나의 strategy는 하나의 primary domain만 가지며 Lab 내부를 서로 import하지 않는다.
 
-관련 결정은 [ADR-0001](./ADR/ADR-0001-modular-monolith.md), [ADR-0002](./ADR/ADR-0002-domain-discriminated-contracts.md), [ADR-0004](./ADR/ADR-0004-llm-deterministic-boundary.md)에 기록한다.
-
-## 2. 시스템 구조
-
-전체 개요는 [README 다이어그램](./README.md#프로그램-전체-구조)을 사용한다. 이 문서의 다이어그램은 개별 구현 질문에만 답한다.
-
-### 2.1 실행 경계
+## 2. 실행 경계
 
 ```mermaid
 flowchart LR
-    U[API / CLI] --> A[Application Services]
-    A --> D[Domain Core]
-    A --> P[Ports]
-    P --> S[(Storage)]
-    P --> E[Engines]
-    P -. structured request .-> L[LLM Adapter]
-    L -. untrusted candidate .-> P
+    U[REST / CLI] --> A[Application Services]
+    A --> D[Deterministic Domain Core]
+    A --> R[Repository and CAS Ports]
+    A --> L[Ordered LLM Adapters]
+    A --> E[Domain-owned Engines]
+    R --> S[(SQLite)]
+    R --> C[(Local CAS)]
+    L -. untrusted JSON .-> A
+    E -. result/artifacts .-> A
 ```
 
-- `Domain Core`: 상태, entity, schema, 정책, 불변식의 권위자
-- `Application Services`: use case 조정과 transaction 경계
-- `Ports`: storage, LLM, engine, clock, ID, artifact의 추상 계약
-- `Adapters`: FastAPI, CLI, SQLite, filesystem, provider SDK 구현
-- `Engines`: StrategySpec을 받아 ExperimentResult를 반환하는 결정론적 실행기
+- **Adapter**: REST 또는 `argparse` 입력을 동일 command/query와 response DTO로 변환한다.
+- **Application service**: transaction 경계, write-ahead intent, CAS와 작업 순서를 조정한다.
+- **Domain core**: AF-CANON, state machine, compiler, finite iterator, ranking, validation 및 disclosure 정책을 결정론적으로 시행한다.
+- **Repository/CAS**: SQLite 제약과 atomic artifact rename을 제공할 뿐 business decision을 만들지 않는다.
+- **LLM adapter**: snapshot에 등록된 provider/model을 순서대로 호출하고 plain JSON 결과/오류만 반환한다. provider SDK object와 credential는 경계를 넘지 않는다.
+- **Engine**: 입력을 수정하지 않고, 명시된 data/policy로만 실행한다. 누락된 data·cost·latency·fill·slippage·impact·borrow·funding·accounting policy는 reason code와 함께 preflight에서 거절한다.
 
-LLM 응답은 `untrusted candidate`다. schema validation, capability 검사, budget 검사, hard gate를 통과한 뒤에만 entity revision으로 저장한다.
+## 3. 권위 계약
 
-## 3. 컴포넌트 책임
+### 3.1 AF-CANON identity registry
 
-| 컴포넌트 | 책임 | 소유 데이터 | 호출 가능 대상 |
-| --- | --- | --- | --- |
-| API/CLI Adapter | 입력 parsing, 인증 컨텍스트, 출력 formatting | 없음 | Application Services |
-| Research Orchestrator | use case 순서, 예산, 프로그램 DAG, 승인 관문 | Mandate/Program 상태 | 아래 모든 application port |
-| Knowledge Plane | source·claim·반대근거·실패기억 조회 | Knowledge record | StoragePort |
-| Capability Plane | dataset·engine·config snapshot 생성 | CapabilitySnapshot | StoragePort, registries |
-| Domain Router | 주 도메인과 보조 interface 선택 | DomainRoute | Lab Registry |
-| Lab Registry | domain key로 Lab plugin 제공 | plugin metadata | Lab plugin |
-| Research Generator | 질문·가설·전략 후보 생성 | 권위 데이터 없음 | LLMPort |
-| Question Auditor | schema·근거·실행 가능성 검사 | AuditResult | Capability, validation rules |
-| Experiment Compiler | 실행 입력 정규화와 fingerprint 생성 | ExperimentConfig | Engine Registry |
-| Engine Registry | engine key로 실행기 제공 | engine metadata | Engine |
-| Validation Registry | 공통·도메인 gate 실행 | ValidationReport | validation rules |
-| Result Registry | Strategy 또는 Rejection 종결 기록 | registry entry | StoragePort |
-| Job Runner | 장시간 use case 실행과 복구 | Job | Application Services |
+모든 normative digest는 SHA-256(`domain_utf8 || 0x00 || field_count_u32be || encoded_fields`)이다. field는 `name_len_u16be || name_ascii || type_tag_u8 || value_len_u64be || value`로 encode하며 이름은 UTF-8 byte 순으로 정렬한다. type tag는 null=0, false=1, true=2, UTF-8 string=3, signed integer=4, Decimal=5, bytes=6, list=7, object=8이다.
 
-컴포넌트는 다른 컴포넌트의 DB table을 직접 읽지 않는다. Application service 또는 공개 port를 사용한다.
+- integer는 최소 base-10 ASCII, Decimal은 지수 표기와 negative zero가 없는 normalized ASCII, string은 NFC UTF-8, timestamp는 UTC RFC3339 microsecond, hash는 raw 32 bytes다. NaN/Infinity는 금지한다.
+- list는 선언된 semantic order의 length-prefixed item, object는 재귀적으로 정렬된 named field를 encode한다. identity에 영향을 주는 unnamed/implementation-defined 값과 unknown identity field는 거절한다.
+- `docs/05_Database.md#32-af-canon-resource-storage`의 hash text는 이 raw digest의 display form일 뿐 canonical input이 아니다.
 
-## 4. 핵심 계약
-
-### 4.1 Lab Plugin
-
-```python
-class LabPlugin(Protocol):
-    domain: Domain
-    question_model: type[ResearchQuestionPayload]
-    strategy_model: type[StrategyPayload]
-    engine_key: str
-
-    def audit_question(self, question, capability) -> AuditResult: ...
-    def compile_hypothesis(self, question) -> HypothesisSpec: ...
-    def compile_strategy(self, hypothesis) -> StrategySpec: ...
-    def validation_rules(self) -> Sequence[ValidationRule]: ...
-```
-
-MVP의 8개 plugin은 모두 이 계약을 구현한다. Factor와 StatArb만 실제 engine을 사용하고 나머지는 fixture smoke engine을 사용한다.
-
-### 4.2 Engine
-
-```python
-class ExperimentEngine(Protocol):
-    engine_key: str
-
-    def validate_config(self, config: ExperimentConfig) -> None: ...
-    def run(self, config: ExperimentConfig, data: DataBundle) -> ExperimentResult: ...
-```
-
-Engine은 LLM, HTTP, application service를 호출하지 않는다. 입력 config를 수정하지 않으며 결과와 artifact만 반환한다.
-
-### 4.3 LLM Port
-
-```python
-class ResearchGeneratorPort(Protocol):
-    def generate_questions(self, request: QuestionGenerationRequest) -> list[dict]: ...
-    def generate_hypothesis(self, request: HypothesisGenerationRequest) -> dict: ...
-    def generate_strategy(self, request: StrategyGenerationRequest) -> dict: ...
-```
-
-Adapter는 timeout, provider 오류, token 사용량을 표준 결과로 변환한다. Domain object 생성은 adapter가 아니라 application service가 담당한다.
-
-## 5. 데이터 흐름
-
-### 5.1 연구 생성과 실행
-
-1. API/CLI가 Mandate command를 Application Service에 전달한다.
-2. Orchestrator가 Capability snapshot과 Knowledge context를 고정한다.
-3. Domain Router가 주 도메인을 선택한다.
-4. 질문 지정 모드는 입력 질문을 정규화하고, 영역 지시 모드는 LLM 후보를 생성한다.
-5. Question Auditor가 후보를 판정한다.
-6. 승인 질문에서 Hypothesis와 Strategy revision을 생성한다.
-7. Experiment Compiler가 데이터·정책·seed·버전을 고정하고 fingerprint를 계산한다.
-8. Engine Registry가 해당 engine으로 실행한다.
-9. Validation Registry가 공통 gate 후 도메인 gate를 실행한다.
-10. 통과하면 Strategy Registry, 실패하면 Rejection Registry에 기록한다.
-
-### 5.2 Experiment fingerprint
-
-다음 canonical JSON의 SHA-256을 사용한다.
-
-```text
-strategy schema/version + normalized payload
-dataset IDs + immutable versions + content hashes
-period + split policy
-cost/latency/fill/slippage/impact/borrow/funding policies
-engine key/version
-validation rule-set version
-random seed
-code release
-```
-
-key 정렬, UTF-8, UTC timestamp, 명시적 null, decimal 문자열 표현을 사용한다. 같은 fingerprint의 성공 결과가 있으면 기존 experiment를 반환한다.
-
-## 6. Event Flow
-
-MVP 이벤트는 외부 broker가 아니라 application transaction 이후 in-process dispatcher에 전달한다. 이벤트는 관측과 후속 작업을 위한 것이며 비즈니스 상태의 권위 원본이 아니다.
-
-| Event | 발생 시점 | 소비자 |
+| Identity | Domain separator | exhaustive named fields |
 | --- | --- | --- |
-| `mandate.accepted` | Mandate 저장 완료 | Job Runner |
-| `question.approved` | 감사 통과 | Program Builder |
-| `question.rejected` | 감사 실패 | Failure Memory Writer |
-| `experiment.completed` | 결과와 artifact 저장 완료 | Validation Service |
-| `experiment.failed` | 실행 실패 저장 완료 | Failure Memory Writer |
-| `validation.completed` | report 저장 완료 | Result Registry |
+| Candidate | `AF:CANDIDATE:1` | `domain:string`, `operator_set_hash:bytes32`, `strategy_ast:object` |
+| Universe | `AF:UNIVERSE:1` | `candidate_hashes:list[bytes32]` raw-byte ascending, `domain:string`, `operator_set_hash:bytes32`, `version:string` |
+| SearchSpec | `AF:SEARCH_SPEC:1` | `code_hash:bytes32`, `dataset_hashes:list[bytes32]` ascending, `domain:string`, `initial_population_size:int`, `offspring_count:int`, `operator_schedule:list[string]` declared order, `operator_set_hash:bytes32`, `parent_pool_size:int`, `patience:int`, `policy_hashes:list[bytes32]` ascending, `profile_hash:bytes32`, `schema_hashes:list[bytes32]` ascending, `seed:int`, `universe_hash:bytes32` |
+| Traversal | `AF:TRAVERSAL:1` | `candidate_hash:bytes32`, `seed:int` |
+| Parent alternative | `AF:PARENT:1` | `generation_index:int`, `operator_id:string`, `parent_hashes:list[bytes32]` tuple order, `schedule_offset:int`, `seed:int`, `slot_index:int` |
+| Parameter alternative | `AF:PARAMETER:1` | `generation_index:int`, `operator_id:string`, `parameter_indices:list[int]`, `schedule_offset:int`, `seed:int`, `slot_index:int` |
+| Parent-pool snapshot | `AF:PARENT_POOL:1` | `generation_index:int`, `parent_candidate_hashes:list[bytes32]` exact ranked order, `profile_hash:bytes32`, `search_spec_hash:bytes32` |
+| GenerationRequest | `AF:GENERATION_REQUEST:1` | `capability_snapshot_hash:bytes32`, `claim_pins:list[object{id:string,version:string,hash:bytes32}]` ID/version/hash order, `constraints:object`, `domain:string`, `knowledge_pack_hash:bytes32`, `provider_chain:list[object{ordinal:int,provider:string,model:string,config_hash:bytes32}]` ordinal order, `request_schema_hash:bytes32`, `sampling:object`, `user_request:object` |
 
-이벤트 envelope은 [04_API.md](./04_API.md#8-event-schema)가 정의한다. Beta 다중 Worker 전환 시 동일 event name과 payload version을 유지한다.
+`max_generations`는 SearchSpec, resource, API, DB와 implementation에 존재하지 않는다. 정상 종료는 `PLATEAU` 또는 `UNIVERSE_EXHAUSTED`뿐이며 cancellation/interruption은 typed failure다.
 
-## 7. State Transition
+`operator_set_hash`는 ID/version, 모든 operator ID/version·arity·commutativity·implementation/compiler semantic version·입출력 AST type·typed parameter name/type·finite grid·grid ordering/dedup·mutation/crossover semantics·validity predicate·referenced schema hash 전체를 포함한다. `profile_hash`는 score metric definition/version·direction·Decimal quantization/rounding·lexicographic order·hard gate ID/order/threshold·parent/PBO eligibility·tie-break·patience·purged/embargoed exact fold ID·CSCV/PBO parameter/minimum·holdout policy·HoldoutDisclosurePolicy allowlist/version·validation implementation/schema hash 전체를 포함한다.
 
-### 7.1 Mandate
+`universe_hash`는 domain, operator-set hash, version, raw-byte sorted complete candidate list를 포함한다. `dataset_hashes`는 immutable DataBundle manifest/PIT availability/type/unit/row-content hash/version, `policy_hashes`는 모든 비용·지연·fill·slippage·impact·borrow·funding·accounting value와 semantic version, `schema_hashes`는 question/strategy/execution/result/report schema, `code_hash`는 release/compiler/engine/validation/canonicalization identity를 포함한다. semantic component의 변화는 해당 resource hash와 SearchSpec hash를 반드시 바꾼다. comment/display label은 semantic input이 아니다. parameter name은 ASCII 순, grid는 AF-CANON encoded value byte 순으로 deduplicate하며 마지막 parameter가 가장 빨리 변한다.
 
-```mermaid
-stateDiagram-v2
-    [*] --> ACCEPTED
-    ACCEPTED --> RUNNING
-    ACCEPTED --> CANCELLED
-    RUNNING --> COMPLETED
-    RUNNING --> REJECTED
-    RUNNING --> FAILED
-    RUNNING --> CANCELLED
-```
+### 3.2 GenerationRequest, ordered fallback, replay
 
-### 7.2 Experiment
+CapabilitySnapshot은 immutable ordered provider/model chain을 가진다. GenerationRequest는 위 digest로 unique하며 state는 `AVAILABLE | RUNNING | ACCEPTED | FAILED`다. request row는 owner token/job, lease epoch/expiry, next ordinal, accepted artifact, row version을 가진다. owner event는 `ACQUIRED`, `RELEASED_INTERRUPTED`, `TRANSFERRED`, `COMPLETED`뿐이다.
 
-```mermaid
-stateDiagram-v2
-    [*] --> QUEUED
-    QUEUED --> RUNNING
-    QUEUED --> CANCELLED
-    RUNNING --> SUCCEEDED
-    RUNNING --> FAILED
-    RUNNING --> CANCELLED
-```
+1. unique insert는 `AVAILABLE`, epoch 0, owner null을 만든다. owner-null/state/version CAS만 `AVAILABLE` epoch 0을 `RUNNING + ACQUIRED`로 바꾼다.
+2. release된 epoch>0은 prior release/owner/epoch를 연결한 owner-null/state/version CAS로만 `RUNNING + TRANSFERRED`가 된다. `RUNNING`은 matching token/epoch/version으로만 ordinal·lease를 전진하거나 final transition한다.
+3. live `RUNNING` 요청은 expiry 뒤에도 기존 owner/job을 반환하며 provider를 호출하지 않는다. 시간 경과는 warning일 뿐 authority transfer 근거가 아니다.
+4. provider 호출 전에 unique `(request_id, ordinal)` `STARTED` attempt를 insert한다. invalid/failure terminal과 ordinal advance는 하나의 guarded transaction이다.
+5. valid JSON은 typed schema 검증 후 hash 검증·atomic rename으로 accepted artifact를 만든다. 그 뒤 한 transaction에서 `SUCCEEDED_VALID`, matching token/epoch/version/ordinal CAS `RUNNING→ACCEPTED`, artifact link, owner clear, `COMPLETED`를 append한다. final chain failure도 같은 CAS로 `FAILED + COMPLETED`다.
+6. owner job이 terminal이면 matching CAS가 dangling attempt를 `INTERRUPTED`로 terminalize하고 uncertain ordinal을 skip하여 `AVAILABLE + RELEASED_INTERRUPTED`로 만든다. terminal 전에 crash하면 이렇게 처리하고, terminal 뒤 crash면 다음 ordinal을 계속한다. artifact rename 뒤 acceptance 전 CAS file은 orphan일 수 있으나 authority가 아니다.
+7. `ACCEPTED`/`FAILED` duplicate 또는 resubmit은 바꾸지 않고 zero call이다. accepted artifact replay는 LLM을 다시 호출하지 않는다.
 
-### 7.3 Registry
+### 3.3 Frozen parent pool과 finite first-admissible search
 
-```mermaid
-stateDiagram-v2
-    [*] --> CANDIDATE
-    CANDIDATE --> VALIDATED
-    CANDIDATE --> REJECTED
-    VALIDATED --> APPROVED: human approval
-    APPROVED --> RETIRED
-```
+Universe는 duplicate-free candidate hash raw-byte order이고 traversal은 `(TraversalDigest, candidate_hash)` 순이다. generation 0은 traversal 순으로 `min(initial_population_size, N)` trial을 시작한다. generation `g >= 1`의 slot 0 전에 transaction으로 다음 immutable parent-pool row를 만든다.
 
-허용되지 않은 전이는 `AF-STATE-001`로 거절한다. terminal state를 되돌리지 않는다. 수정은 새 revision을 만든다.
+1. generation-start commit 전에 terminal `EVALUATED`, 모든 frozen hard gate 통과, complete/finite/quantized score vector인 CandidateTrial만 읽는다.
+2. profile의 exact lexicographic field/direction/quantized value와 raw candidate hash ascending으로 정렬하고 `K=min(parent_pool_size, eligible_count)`를 retain한다.
+3. exact ordered hashes, profile hash와 `AF:PARENT_POOL:1` digest를 `(search_run_id, generation_index)` unique row로 저장한다. 이후 slot은 live ranking query가 아니라 이 row만 읽는다. 늦게 terminalize한 trial은 다음 generation에서만 고려한다.
 
-## 8. Sequence Diagram
+offspring generation의 slot은 `0..offspring_count-1`이다. 각 slot은 schedule offset ascending, `schedule[(g*O+s+offset) mod length]`, parent digest/hash 순 legal tuple, Parameter digest/vector 순 finite iterator를 사용한다. mutation parent는 중복되지 않고 crossover는 ordered distinct pair(commutative면 canonical `(min,max)` 1개)다. parent 부족 또는 `K=0`이면 parent iterator는 비어 있다.
+
+slot은 순차적으로 실행하고 evaluation order는 ledger position이다. 소비한 alternative마다 schema-invalid이면 `INVALID`, universe 밖이면 `OUTSIDE_UNIVERSE`, 이미 run-scoped proposed/visited면 `DUPLICATE` event를 append한다. 첫 schema-valid/in-universe/unseen candidate만 승자다: accepted proposal, proposed set, 정확히 하나의 `STARTED` CandidateTrial, visited set을 한 transaction으로 기록하고 slot을 멈춘다. 소비하지 않은 alternative은 event가 없다. alternative이 모두 끝나면 traversal universe를 한 번 스캔하여 first unseen candidate를 선택하고 `DIRECT_FALLBACK`, accepted proposal, proposed/visited set, 정확히 하나의 `STARTED` trial을 한 transaction으로 기록한다. 없으면 `SLOT_EXHAUSTED`다. proposed/visited는 run 전체 수명이며 reset되지 않는다. slot당 trial은 0 또는 1개, generation당 최대 O개다.
+
+partial generation은 유효하다. zero-trial generation은 plateau를 바꾸지 않으며 visited=universe면 `UNIVERSE_EXHAUSTED`, 아니면 `FAILED_INVARIANT`다. plateau는 `best=None,counter=0`에서 시작한다. 첫 eligible best는 counter 0, best가 없고 eligible vector가 없으면 increment, strict improvement는 reset, 동점/악화 또는 best 뒤 no eligible vector는 한 번 increment한다. patience(최소 1)는 initialization 및 매 completed generation 뒤 검사한다. precedence는 interruption/invariant failure, universe exhaustion, plateau 순이며 동시면 exhaustion이 이긴다.
+
+### 3.4 CandidateTrial과 exact PBO
+
+preflight/engine 이전의 짧은 transaction은 contiguous ledger position, immutable candidate/operator relation, CandidateTrial `STARTED`, `TRIAL_STARTED`를 함께 기록한다. 각 start에는 정확히 하나의 terminal이 필요하다: `EVALUATED`, `REJECTED_PREFLIGHT`, `REJECTED_HARD_GATE`, `ENGINE_FAILED`, `INTERRUPTED`. startup은 dangling start를 terminalize하고 SearchRun을 failed로 한다. 재제출은 새 lineage다.
+
+PBO certificate는 started/terminal/profile-eligible/matrix trial ID set, count와 expected/observed fold ID를 기록한다. holdout/publication 전에는 다음이 모두 성립해야 한다: `started = terminal` set/count, `eligible = matrix`, 각 eligible fold set = profile fold set, duplicate/missing/NaN/Infinity 없음, normal stop, minimum eligible count 충족. 처음에는 complete finite `EVALUATED`만 eligible이고, profile이 명시한 hard-gate reject는 identical complete folds가 있을 때만 eligible이다. 다른 terminal에 score를 발명하지 않는다. 위반은 `AF-PBO-INCOMPLETE`이며 holdout과 publication을 막는다.
+
+### 3.5 Automatic holdout과 disclosure boundary
+
+pre-validation과 complete PBO가 통과하면 application service가 자동으로 holdout을 시작한다. manual reviewer 승인과 sealed-evaluation endpoint는 없다. sealed read 전에 `BEGIN IMMEDIATE`에서 profile/certificate/open lineage/unused slot을 확인하고 slot을 consume하며 lineage를 close한 뒤 commit한다. 성공·실패·crash와 관계없이 retry/reopen하지 않는다.
+
+frozen HoldoutDisclosurePolicy는 final report의 named aggregate decision/metric/threshold field만 허용한다. selector, row, revealing range, observation return, fold, detail trace와 reconstruction 가능한 값은 공개하지 않는다. report/disclosure module은 knowledge, generation, failure memory, search, ranking, PBO 또는 lineage-mutating service에서 import할 수 없고, 이들 입력도 될 수 없다.
+
+### 3.6 Publication, visibility, restart
+
+preflight-invalid publication request는 `VALIDATION_NOT_PASS`, `LINEAGE_NOT_CLOSED`, `DISCLOSURE_INVALID`, `INPUT_HASH_MISMATCH` 중 non-retryable reason의 idempotent `publication_rejections`만 append하고 Publication은 만들지 않는다.
+
+eligible Publication state는 `AVAILABLE | PREPARING | PUBLISHED | FAILED_RETRYABLE`다. retryable kind는 `ARTIFACT_IO`, `REPORT_RENDER`, `STORAGE_COMMIT`, `OWNER_INTERRUPTED`만 허용한다. Publication은 validation ID unique이며 owner token/job/epoch/expiry/row version과 `ACQUIRED`, `RELEASED_STALE`, `FAILED_ATTEMPT`, `PUBLISHED` event를 가진다. `AVAILABLE` 또는 `FAILED_RETRYABLE`만 fresh token/job/epoch/attempt와 CAS로 `PREPARING`이 된다. live owner의 `PREPARING` duplicate는 expiry 뒤에도 owner job만 반환하고 staging하지 않는다.
+
+정상 path는 matching `PREPARING/token/epoch/version`을 조건으로 한 SQLite transaction 하나다. 이 transaction은 JSON/HTML artifact metadata, validation/strategy/lineage link, 정확히 하나의 pass registry entry, `PUBLISHED`, `PUBLISHED` event와 exact owner job의 `RUNNING→SUCCEEDED` immutable result link를 함께 commit하거나 모두 rollback한다. user-facing strategy/report query는 `PUBLISHED` aggregate만 반환한다.
+
+startup은 예외 없이 persisted `RUNNING` 모든 job을 `FAILED`와 `AF-JOB-INTERRUPTED`로 바꾼다. PUBLISHED는 immutable로 남는다. 그 failed job이 소유한 `PREPARING` publication은 ownership을 clear하고 old job/epoch/orphan hash를 기록하여 `FAILED_RETRYABLE/OWNER_INTERRUPTED`, `RELEASED_STALE`, `FAILED_ATTEMPT`가 된다. live lease expiry만으로 recovery하지 않는다. legacy `PUBLISHED + RUNNING`은 `PUBLISHED + FAILED`이며 success로 복구하지 않는다.
+
+## 4. Application services와 dependency rules
+
+| Service | 소유 책임 | 허용 협력자 |
+| --- | --- | --- |
+| GenerationService | request identity, ownership, attempt chain, replay | Capability/knowledge repository, LLMPort, CAS |
+| SearchService | SearchSpec/run, parent snapshot, iterator, trials | immutable resource repository, Lab compiler, Engine service |
+| ValidationService | frozen profile, folds, PBO certificate, automatic holdout trigger | engine results, holdout port, report input DTO |
+| PublicationService | disclosure validation, report staging, Publication/job atomic commit | CAS, publication/job repositories |
+| RegistryQueryService | `PUBLISHED` result query | publication read model only |
+| InternalRejectionQueryService | rejection/failure lineage query | internal read model only |
+
+`interfaces → application → domain`이고 infrastructure는 application ports를 구현한다. Lab/engine은 domain value object와 명시된 contract만 의존한다. 금지 의존성은 `domain → application/infrastructure/interfaces`, `engine → LLM/API/DB`, `Lab A → Lab B internal`, `route/CLI → repository`, `reporting/disclosure → research feedback service`다.
+
+## 5. Durable sequence
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant API
-    participant Orch as Orchestrator
-    participant Gen as LLM Generator
-    participant Lab
-    participant Eng as Engine
-    participant Val as Validation
-    participant DB as Storage
-
-    User->>API: create mandate
-    API->>Orch: command
-    Orch->>DB: snapshot context
-    opt 영역 지시 모드
-        Orch->>Gen: evidence + capability + constraints
-        Gen-->>Orch: structured candidates
+    participant I as REST or CLI Adapter
+    participant A as Shared Application Service
+    participant DB as SQLite
+    participant G as Ordered LLM Adapter
+    participant E as Domain Engine
+    participant V as Validation/Publication
+    I->>A: identical command/query DTO
+    A->>DB: persist intent, owner and STARTED event
+    opt generation not accepted
+        A->>G: next snapshotted ordinal
+        G-->>A: plain typed JSON or failure
+        A->>DB: terminal attempt/CAS or next ordinal
     end
-    Orch->>Lab: audit and compile
-    Lab-->>Orch: StrategySpec
-    Orch->>Eng: ExperimentConfig
-    Eng-->>Orch: ExperimentResult
-    Orch->>Val: result + lineage
-    Val-->>Orch: ValidationReport
-    Orch->>DB: commit registry result
-    Orch-->>API: job result
+    A->>DB: frozen parent pool, proposal and STARTED trial
+    A->>E: explicit config and immutable data
+    E-->>A: result/artifacts
+    A->>V: complete ledger and frozen profile
+    V->>DB: consume holdout slot and close lineage before sealed read
+    V->>DB: atomically PUBLISHED + registry pass + job SUCCEEDED
+    A-->>I: job/result DTO
 ```
 
-LLM 호출 실패는 engine 실행을 시작시키지 않는다. Engine 또는 validation 실패는 성공 Registry entry를 만들지 않는다.
+## 6. Storage, recovery, observability
 
-## 9. 의존성 규칙
+CAS write order는 temporary same-filesystem write, byte/hash verification, atomic rename, DB metadata/owner reference transaction이다. orphan CAS file은 proven-unreferenced이고 live generation/publication epoch로 보호되지 않을 때만 정리할 수 있다.
 
-```text
-interfaces/adapters  ──> application ──> domain
-infrastructure       ──> application ports
-labs                 ──> domain contracts
-engines              ──> engine contracts + domain value objects
-domain               ──> standard library only
-```
+구조화 log에는 `correlation_id`, `job_id`, `request_hash`, `attempt_ordinal`, `search_run_id`, `generation_index`, `slot_index`, `trial_id`, `publication_id`, `stage`, `duration_ms`, `error_code`를 기록한다. secret, prompt/response 전문, raw dataset, sealed selector/detail은 기록하지 않는다.
 
-금지되는 의존성:
-
-- `domain -> application/infrastructure/interfaces`
-- `engine -> LLM/API/DB adapter`
-- `lab A -> lab B`의 내부 모듈
-- `API route -> repository` 직접 호출
-- `LLM adapter -> domain repository` 직접 호출
-
-## 10. Directory Structure
-
-```text
-src/alpha_foundry/
-├── domain/
-│   ├── models.py
-│   ├── states.py
-│   ├── policies.py
-│   └── errors.py
-├── application/
-│   ├── commands.py
-│   ├── queries.py
-│   ├── orchestrator.py
-│   ├── jobs.py
-│   └── ports.py
-├── labs/
-│   ├── factor/
-│   ├── statarb/
-│   ├── market_making/
-│   ├── structural_flow/
-│   ├── cross_venue/
-│   ├── derivatives/
-│   ├── event_fundamental/
-│   └── time_series/
-├── engines/
-│   ├── panel.py
-│   ├── multileg.py
-│   └── smoke.py
-├── validation/
-│   ├── common.py
-│   └── registry.py
-├── infrastructure/
-│   ├── db/
-│   ├── artifacts/
-│   ├── llm/
-│   └── datasets/
-├── interfaces/
-│   ├── api/
-│   └── cli/
-└── bootstrap.py
-tests/
-├── unit/
-├── contract/
-├── integration/
-├── e2e/
-└── fixtures/
-```
-
-각 package는 `__init__.py`에 공개 interface만 export한다. 테스트를 제외한 외부 package는 내부 파일을 직접 import하지 않는다.
-
-## 11. Service Dependency
-
-| 호출자 | 의존 대상 | 실패 정책 |
-| --- | --- | --- |
-| API/CLI | Application Services | domain error를 표준 오류로 변환 |
-| Orchestrator | SQLite repository | transaction rollback, job 실패 기록 |
-| Orchestrator | LLM adapter | timeout 1회 재시도 후 생성 실패 |
-| Orchestrator | Dataset adapter | 누락·hash 불일치 시 실행 차단 |
-| Orchestrator | Engine | 예외를 `ENGINE_FAILED`로 격리 |
-| Validation | Artifact reader | 누락 artifact면 hard fail |
-
-MVP는 단일 process 안에서 호출하므로 네트워크 retry를 일반화하지 않는다.
-
-## 12. Deployment Architecture
-
-### 12.1 MVP
-
-```mermaid
-flowchart LR
-    C[CLI / HTTP Client] --> P[Alpha Foundry Process]
-    P --> DB[(SQLite)]
-    P --> FS[(Local Artifacts)]
-    P -. HTTPS .-> L[LLM Provider]
-```
-
-- API와 단일 Worker는 같은 release를 사용한다.
-- SQLite는 WAL mode와 process 단일 writer 규칙을 사용한다.
-- artifact는 content hash 기반 경로에 atomic rename으로 저장한다.
-
-### 12.2 Beta
-
-PostgreSQL, object storage, API process와 Worker process 분리를 적용한다. 다중 Worker는 lease와 idempotent side effect가 검증된 후 활성화한다.
-
-### 12.3 Production
-
-관리형 DB·object storage, 비밀 관리, 중앙 log/metric, 백업·복구, 네트워크 접근 제어를 적용한다. Production은 구조 변경이 아니라 MVP port의 adapter 교체다.
-
-## 13. 장애와 복구
-
-| 장애 | MVP 동작 | 불변식 |
-| --- | --- | --- |
-| LLM timeout | 1회 재시도 후 job 실패 | 후보 revision 미생성 |
-| Engine 예외 | experiment `FAILED` | 성공 result·registry 미생성 |
-| process 종료 | 시작 시 `RUNNING` job을 `QUEUED`로 복구 | 완료 artifact 유지 |
-| artifact 쓰기 중단 | 임시 파일 제거 | metadata는 완성 hash만 참조 |
-| DB commit 실패 | transaction rollback | 부분 상태 전이 없음 |
-| sealed 실행 중단 | access는 소비된 것으로 유지 | 두 번째 노출 금지 |
-
-## 14. 관측성
-
-모든 구조화 log는 다음 필드를 포함한다.
-
-```text
-timestamp, level, event, correlation_id, job_id,
-mandate_id, experiment_id, stage, duration_ms, error_code
-```
-
-LLM prompt 전문, dataset row, secret, sealed selector는 log에 기록하지 않는다. token 수, provider model, prompt hash는 기록한다.
-
-## 15. ADR 연결
-
-| 주제 | ADR |
-| --- | --- |
-| 배포 단위 | [ADR-0001](./ADR/ADR-0001-modular-monolith.md) |
-| 도메인 schema | [ADR-0002](./ADR/ADR-0002-domain-discriminated-contracts.md) |
-| 엔진 분리 | [ADR-0003](./ADR/ADR-0003-domain-specific-backtest-engines.md) |
-| LLM 경계 | [ADR-0004](./ADR/ADR-0004-llm-deterministic-boundary.md) |
-| 저장소 | [ADR-0005](./ADR/ADR-0005-storage-topology.md) |
-| 계보와 holdout | [ADR-0006](./ADR/ADR-0006-experiment-lineage-and-sealed-holdout.md) |
-| Job 실행 | [ADR-0007](./ADR/ADR-0007-durable-asynchronous-jobs.md) |
-| 도메인 결합 | [ADR-0008](./ADR/ADR-0008-cross-domain-composition.md) |
+관련 결정은 [ADR-0001](./ADR/ADR-0001-modular-monolith.md)~[ADR-0008](./ADR/ADR-0008-cross-domain-composition.md), finite search/trial ledger와 validation/holdout/publication ADR에 기록한다.

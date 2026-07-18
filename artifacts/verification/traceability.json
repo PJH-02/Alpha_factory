@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "kind": "contract-traceability-report",
+  "command": ["uv", "run", "--locked", "--no-sync", "python", "scripts/check_traceability.py"],
+  "expectedExitCode": 0,
+  "actualExitCode": 0,
+  "verdict": "passed",
+  "recordedStdout": "Requirements, acceptance criteria, and required test evidence are traceable.\n",
+  "contractSource": ".gjc/_session-019f5598-655f-7000-b8f3-39e90ea4e8a3/plans/ralplan/019f5598-655f-7000-b8f3-39e90ea4e8a3/pending-approval.md",
+  "evidenceSources": [
+    "docs/01_Requirements.md",
+    "docs/07_TestPlan.md",
+    "tests"
+  ]
+}

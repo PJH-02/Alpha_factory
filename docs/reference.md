@@ -6,7 +6,7 @@
 | -------------------- | ---------------------- | --------------------------------------------------------------------- | ----------------------- |
 | Factor 후보 탐색과 실패기억   | AlphaMemo              | 탐색 원장, 부모-자식 계보, AST 차이 기반 edit motif, 실패 패턴 veto                     | 공식형 Factor에만 적용         |
 | StatArb pair 탐색      | MTRGL                  | 시간에 따라 변하는 관계를 temporal graph로 표현하고 link prediction으로 pair 후보 생성      | 백테스트·포지션 회계 근거는 아님      |
-| 다중 탐색 과적합 검증         | PBO                    | CSCV를 이용해 선택된 백테스트의 과적합 확률 측정                                         | DSR은 별도 논문 필요           |
+| 다중 탐색 과적합 검증         | PBO                    | CSCV를 이용해 선택된 백테스트의 과적합 확률 측정                                         | PBO의 직접 근거; DSR은 별도 출처이며 초기 릴리스 필수 gate 아님 |
 | Market Making Engine | LOB Simulation Review  | queue priority, hidden order, auction, market impact를 포함한 사건 기반 시뮬레이션 | 특정 시뮬레이터를 그대로 복제할 필요 없음 |
 | Market Making 상태·보상  | Market Making via RL   | inventory risk와 비대칭 보상, 사건 기반 상태·행동                                   | latency 근거로 사용하면 안 됨    |
 | LLM 질문·가설 생성         | KG-CoI                 | 구조화 지식으로 생성 근거를 제한하고 별도 hallucination 검증 수행                           | 금융 연구 성능을 입증한 논문은 아님    |
@@ -108,6 +108,8 @@ MTRGL은 Pair Trading 후보 탐색을 temporal graph link prediction 문제로 
 ## 3. Probability of Backtest Overfitting
 
 논문: [The Probability of Backtest Overfitting](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=2326253)
+이 논문은 PBO와 CSCV의 직접 근거다. 이 근거는 DSR이나 다른 통계량의 필요성·정의를 규정하지 않는다.
+
 
 ### 논문에서 참조할 내용
 
@@ -136,21 +138,18 @@ MTRGL은 Pair Trading 후보 탐색을 temporal graph link prediction 문제로 
 
 > 계보 내 최종 후보만 보존해서는 탐색 과적합을 측정할 수 없다. PBO 계산을 위해 선택되지 않은 후보를 포함한 모든 trial의 OOS 성과와 선택 순서를 탐색 원장에 기록한다.
 
-### 중요한 인용 오류
+### PBO와 DSR 인용 경계
 
-원 기획서는 다음 문장에서 `[3]` 하나로 DSR과 PBO를 모두 인용합니다.
+원 기획서가 `[3]` 하나로 DSR과 PBO를 함께 인용한 것은 정확하지 않다. `[3]`은 PBO와 CSCV의 직접 근거이며 DSR의 직접 근거가 아니다.
 
-> DSR은 비정규 수익률과 다중 탐색에 따른 선택 편향을 보정하며, PBO는…
-
-하지만 참고문헌 `[3]`은 PBO와 CSCV 논문입니다. DSR의 직접 근거가 아닙니다.
-
-DSR에는 별도 참고문헌을 추가해야 합니다.
+DSR은 별도 출처로만 다룬다.
 
 * David H. Bailey, Marcos López de Prado
 * *The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality*
 * [DOI 10.3905/jpm.2014.40.5.094](https://doi.org/10.3905/jpm.2014.40.5.094)
 
-따라서 문서에서는 `PBO`와 `DSR`을 서로 다른 Validation Rule로 관리해야 합니다.
+초기 릴리스의 `ValidationProfile`, 필수 validation gate, 출시 기준에는 DSR을 넣지 않는다. DSR을 후속으로 채택하려면 이 별도 근거와 독립적인 지표 정의·입력 계약·검증 기준을 명시한 결정이 필요하다.
+
 
 ---
 
@@ -358,18 +357,10 @@ Alpha Foundry에서는 Factor 후보의 저비용 사전 선별에 사용할 수
 
 ### Deflated Sharpe Ratio
 
-PBO와 별도 참고문헌으로 등록해야 합니다.
+DSR은 PBO와 분리된 후속 검토용 참고문헌이다: [The Deflated Sharpe Ratio: Correcting for Selection Bias, Backtest Overfitting, and Non-Normality](https://doi.org/10.3905/jpm.2014.40.5.094).
 
-DSR은 다음 입력을 요구하도록 Validation 계약을 설계해야 합니다.
+문헌상 DSR을 계산하려면 관측 Sharpe, trial 수 또는 유효 독립 trial 수, trial Sharpe 분산, return skewness, return kurtosis, sample length 같은 입력이 필요하다. 그러나 초기 릴리스의 Validation 계약은 이 입력을 요구하거나 DSR을 계산하지 않으며, PBO의 complete trial ledger 요건으로 대체하지도 않는다. DSR 채택 여부는 별도 ADR과 사전 고정된 ValidationProfile에서 결정한다.
 
-* 관측 Sharpe
-* 전체 trial 수 또는 유효 독립 trial 수
-* trial Sharpe 분산
-* return skewness
-* return kurtosis
-* sample length
-
-이를 위해 모든 탐색 trial을 Search Ledger에 남겨야 합니다.
 
 ---
 
@@ -381,10 +372,10 @@ DSR은 다음 입력을 요구하도록 Validation 계약을 설계해야 합니
 | `02_Architecture.md`    | AlphaMemo, MTRGL, LOB Review, KG-CoI, Wiki vs RAG            |
 | `03_DevelopmentPlan.md` | AlphaMemo 고급 memory와 실제 graph/LOB engine을 Beta 작업 근거로 사용     |
 | `05_Database.md`        | Search Ledger·Failure Memory 구조는 AlphaMemo ADR 참조            |
-| `07_TestPlan.md`        | PBO, DSR, AlphaEval, LOB stylized facts, inventory risk test |
+| `07_TestPlan.md`        | PBO, AlphaEval, LOB stylized facts, inventory risk test (DSR은 후속 검토) |
 | `ADR-0002`              | AlphaMemo와 MTRGL을 이용한 domain schema 분리 근거                    |
 | `ADR-0003`              | LOB Review, ABIDES, Market Making RL을 이용한 전용 engine 근거       |
 | `ADR-0004`              | KG-CoI를 이용한 LLM 생성·검증 분리 근거                                  |
-| `ADR-0006`              | PBO와 DSR을 이용한 계보·전체 trial·sealed holdout 근거                  |
+| `ADR-0006`              | PBO를 이용한 계보·전체 trial·sealed holdout 근거 (DSR은 초기 릴리스 필수 gate 아님) |
 
 핵심적으로 논문은 “이 구조가 유일한 정답”이라는 근거가 아니라, 도메인별 모델을 분리하고 탐색 기록·검증·LLM 경계를 두어야 한다는 설계 근거로 사용하는 것이 적절합니다.

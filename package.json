@@ -1,0 +1,14 @@
+{
+  "name": "alpha-foundry-tooling",
+  "private": true,
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "render:mermaid": "mmdc -i docs/diagrams/alpha_foundry_overview.mmd -o docs/diagrams/alpha_foundry_overview.svg",
+    "check:mermaid": "mmdc --version"
+  },
+  "devDependencies": {
+    "@mermaid-js/mermaid-cli": "11.4.2"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "kind": "cli-replay",
+  "replaySafe": false,
+  "command": ["uv", "run", "--locked", "--no-sync", "alpha-foundry", "--help"],
+  "cwd": ".",
+  "env": {"LC_ALL": "C"},
+  "timeoutMs": 60000,
+  "expectedExitCode": 0,
+  "recordedStdout": "usage: alpha-foundry [-h] [--home HOME] [--database DATABASE]\n                     [--artifacts ARTIFACTS]\n                     [--idempotency-key IDEMPOTENCY_KEY] [--json]\n                     {health,knowledge,mandate,search,generation,registry,report,internal,job}\n                     ...\n\npositional arguments:\n  {health,knowledge,mandate,search,generation,registry,report,internal,job}\n\noptions:\n  -h, --help            show this help message and exit\n  --home HOME           local runtime directory\n  --database DATABASE   SQLite metadata path\n  --artifacts ARTIFACTS\n                        local CAS root\n  --idempotency-key IDEMPOTENCY_KEY\n                        optional mutation replay key\n  --json                emit compact JSON data\n",
+  "recordedStderr": "",
+  "normalization": "default",
+  "invariants": [
+    {"type": "substring", "value": "{health,knowledge,mandate,search,generation,registry,report,internal,job}"},
+    {"type": "not-substring", "value": "Traceback"}
+  ],
+  "replayExempt": {
+    "reasonCode": "platform_unavailable",
+    "reason": "The checkpoint replay allowlist excludes the installed alpha-foundry console entrypoint, so its successful local invocation is preserved with the same-surface pytest CLI report as fallback evidence.",
+    "approvedBy": "0-Main",
+    "fallbackArtifactRefs": ["cli-suite-junit"]
+  }
+}

@@ -1,50 +1,47 @@
 flowchart TB
-    UI["API / CLI"]
+    ENTRY["API / CLI"]
 
-    subgraph CODE["CODE AREA"]
+    subgraph AUTH["DETERMINISTIC AUTHORITY"]
         direction TB
-        ORCH["Research Orchestrator<br/>상태 · 예산 · DAG · 승인"]
+        KNOWLEDGE["Knowledge<br/>immutable claims · evidence · failure memory"]
+        SNAPSHOT["CapabilitySnapshot<br/>datasets · policies · ordered providers"]
+        GENERATION["Generation Service<br/>claim pins · typed JSON validation · replay"]
+        COMPILER["Strategy Compiler<br/>schema · operator allowlist"]
+        SEARCH["Finite Deterministic Search<br/>canonical identities · frozen parent pools · trial ledger"]
+        LABS["8 Domain Labs / Engines<br/>Factor · StatArb · Market Making · Structural Flow<br/>Cross Venue · Derivatives · Event Fundamental · Time Series"]
+        VALIDATION["Validation<br/>hard gates · purged/embargoed walk-forward"]
+        PBO["PBO<br/>complete trial-ledger certificate"]
+        HOLDOUT["Sealed Holdout<br/>automatic pre-access atomic consumption · lineage closure"]
+        PUBLICATION["Publication<br/>atomic PUBLISHED visibility"]
+        REPORT["ResearchReport<br/>canonical JSON · deterministic HTML"]
 
-        subgraph CONTEXT["RESEARCH CONTEXT"]
-            direction LR
-            KP["Knowledge Plane<br/>원문 · 주장 · 반대근거 · 실패기억"]
-            CP["Capability Plane<br/>데이터 · 엔진 · Config"]
-        end
-
-        ROUTER["Domain Router"]
-        LAB["Lab Registry<br/>Factor · StatArb · MM · Flow<br/>CrossVenue · Derivative · Event · TS"]
-        COMPILER["Experiment Compiler"]
-        ENGINE["Engine Registry<br/>Panel · MultiLeg · LOB · Event · MultiVenue"]
-        VALIDATION["Validation Registry"]
-        RESULT["Strategy / Rejection Registry"]
-
-        ORCH --> KP
-        ORCH --> CP
-        KP --> ROUTER
-        CP --> ROUTER
-        ROUTER --> LAB
-        LAB --> COMPILER
-        COMPILER --> ENGINE
-        ENGINE --> VALIDATION
-        VALIDATION --> RESULT
+        KNOWLEDGE --> GENERATION
+        SNAPSHOT --> GENERATION
+        GENERATION --> COMPILER
+        COMPILER --> SEARCH
+        SEARCH --> LABS
+        LABS --> VALIDATION
+        VALIDATION --> PBO
+        PBO --> HOLDOUT
+        HOLDOUT --> PUBLICATION
+        PUBLICATION --> REPORT
     end
 
-    subgraph AI["LLM AREA"]
+    subgraph LLM_BOUNDARY["UNTRUSTED LLM BOUNDARY"]
         direction TB
-        GENERATOR["Research Generator<br/>질문 · 가설 · 전략 후보"]
+        LLM_GENERATOR["LLM Candidate Generator<br/>untrusted typed JSON only"]
     end
 
-    UI --> ORCH
-    ORCH -.->|제약 포함 요청| GENERATOR
-    GENERATOR -.->|구조화 후보| ORCH
+    ENTRY --> GENERATION
+    GENERATION -.->|snapshotted constrained request| LLM_GENERATOR
+    LLM_GENERATOR -.->|untrusted candidate| GENERATION
 
-    classDef code fill:#e8f1ff,stroke:#2563eb,stroke-width:1.5px,color:#111827;
+    classDef authority fill:#e8f1ff,stroke:#2563eb,stroke-width:1.5px,color:#111827;
     classDef llm fill:#fff4d6,stroke:#d97706,stroke-width:1.5px,color:#111827;
     classDef entry fill:#f8fafc,stroke:#475569,stroke-width:1.5px,color:#111827;
-    class ORCH,KP,CP,ROUTER,LAB,COMPILER,ENGINE,VALIDATION,RESULT code;
-    class GENERATOR llm;
-    class UI entry;
+    class KNOWLEDGE,SNAPSHOT,GENERATION,COMPILER,SEARCH,LABS,VALIDATION,PBO,HOLDOUT,PUBLICATION,REPORT authority;
+    class LLM_GENERATOR llm;
+    class ENTRY entry;
 
-    style CODE fill:#f8fbff,stroke:#2563eb,stroke-width:2px
-    style AI fill:#fffaf0,stroke:#d97706,stroke-width:2px
-    style CONTEXT fill:#ffffff,stroke:#94a3b8,stroke-width:1px
+    style AUTH fill:#f8fbff,stroke:#2563eb,stroke-width:2px
+    style LLM_BOUNDARY fill:#fffaf0,stroke:#d97706,stroke-width:2px

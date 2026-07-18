@@ -1,432 +1,172 @@
 # Alpha Foundry 데이터베이스 설계
 
-상태: Approved  
-MVP engine: SQLite 3.45+ in WAL mode  
-Beta target: PostgreSQL 16+
+상태: Approved
+MVP engine: SQLite 3.45+ WAL, single writer
+Artifact store: local content-addressed filesystem
 
-이 문서는 영속 데이터의 권위 문서다. HTTP request와 response는 [04_API.md](./04_API.md)가 정의한다.
+이 문서는 영속 상태와 transaction invariant의 권위 문서다. API wire는 [04_API.md](./04_API.md), canonical schema와 state machine은 [02_Architecture.md](./02_Architecture.md#3-권위-계약)을 따른다. Beta PostgreSQL 전환은 별도 승인 전까지 이 contract를 바꾸지 않는다.
 
 ## 1. 저장 원칙
 
-1. MVP는 metadata와 상태를 SQLite에, 큰 결과를 content-addressed filesystem에 저장한다.
-2. domain payload와 정책은 versioned JSON으로 저장하되 핵심 조회·무결성 field는 typed column으로 둔다.
-3. revision resource는 update하지 않고 새 row를 추가한다.
-4. 상태 resource만 제한적으로 update하며 `row_version`을 증가시킨다.
-5. timestamp는 UTC ISO-8601 text, decimal은 canonical decimal text로 저장한다.
-6. artifact metadata commit은 파일의 atomic rename이 성공한 뒤 수행한다.
-7. repository port는 SQLite 전용 SQL을 application/domain에 노출하지 않는다.
+1. SQLite는 metadata, immutable resource, state, event와 relation을 저장한다. 큰 JSON/HTML/engine output은 CAS에 저장하고 hash metadata만 DB가 참조한다.
+2. semantic resource와 revision은 append-only다. mutable ownership/state row만 제한적으로 update하며 모든 update는 `row_version` CAS와 owner/event audit를 가진다.
+3. provider call, trial engine work, sealed read, artifact publication 전에 durable intent/owner/`STARTED` record를 commit한다. final authority는 terminal event와 matching CAS가 같은 transaction에 있을 때만 생긴다.
+4. timestamp는 UTC RFC3339 microsecond text, Decimal은 normalized Decimal text, JSON은 schema-validated canonical JSON이다. NaN/Infinity는 저장하지 않는다.
+5. CAS file metadata는 atomic rename 뒤에만 commit한다. orphan CAS file은 authority가 아니며 protected live epoch가 없을 때만 제거한다.
+6. application은 SQLite-specific SQL을 domain에 노출하지 않는다. migration 없이 runtime schema를 생성·수정하지 않는다.
 
-저장소 선택 근거는 [ADR-0005](./ADR/ADR-0005-storage-topology.md)에 기록한다.
+## 2. 공통 형식과 AF-CANON resource storage
 
-## 2. 공통 규칙
+### 2.1 공통 형식
 
-### 2.1 Naming
+- table/column은 `snake_case`, ID는 `<entity>_id TEXT` UUID PK, FK는 referenced ID와 같은 이름이다.
+- display hash는 `sha256:<64 lowercase hex>`이며 AF-CANON encode input에는 raw 32 digest bytes를 사용한다.
+- boolean은 `INTEGER CHECK(value IN (0,1))`, mutable row는 `updated_at TEXT NOT NULL`, `row_version INTEGER NOT NULL CHECK(row_version >= 1)`을 가진다.
+- immutable row는 `created_at`, `created_by`, `schema_version`, `code_version`, `content_hash`를 가진다. semantic update는 새 version/hash row이며 old row update/delete는 금지한다.
 
-- table과 column: `snake_case`
-- PK: `<entity>_id TEXT`
-- FK: 참조 PK와 같은 이름
-- boolean: SQLite `INTEGER CHECK(value IN (0,1))`
-- JSON: canonical JSON `TEXT`, write 전에 schema 검증
-- hash: `sha256:<64 lowercase hex>`
+### 2.2 AF-CANON resource storage
 
-### 2.2 공통 컬럼
+`immutable_resources`는 reviewed immutable resource의 common envelope이다.
 
-revision table은 다음을 가진다.
+| column | 제약 |
+| --- | --- |
+| `resource_id` | PK |
+| `resource_kind` | `OPERATOR_SET/VALIDATION_PROFILE/UNIVERSE/SEARCH_SPEC/SCHEMA/DATA_BUNDLE/POLICY/CAPABILITY_SNAPSHOT/KNOWLEDGE_PACK` |
+| `resource_key`, `version` | logical identity; `(resource_kind, resource_key, version)` UNIQUE |
+| `semantic_json` | exact schema-validated AF-CANON named fields; no unknown identity field |
+| `canonical_bytes_hash` | canonical encoded bytes SHA-256; UNIQUE |
+| provenance columns | immutable common columns |
 
-| 컬럼 | 타입 | Null | 규칙 |
-| --- | --- | --- | --- |
-| `<entity>_id` | TEXT | N | UUID PK |
-| `created_at` | TEXT | N | UTC timestamp |
-| `created_by` | TEXT | N | actor ID |
-| `schema_version` | TEXT | N | semantic version |
-| `code_version` | TEXT | N | release identifier |
-| `content_hash` | TEXT | N | canonical content SHA-256 |
-| `parent_id` | TEXT | Y | 이전 revision |
+`content_hash`/`canonical_bytes_hash` equals the registered identity digest where the resource has one. The exhaustive named fields and domain separators for Candidate, Universe, SearchSpec, Traversal, Parent, Parameter, ParentPool and GenerationRequest are exactly [Architecture §3.1](./02_Architecture.md#31-af-canon-identity-registry); the database does not add a default, a `max_generations`, or an un-hashed behavior field. Resource validators recompute the canonical bytes before insert.
 
-mutable state table은 `updated_at TEXT NOT NULL`, `row_version INTEGER NOT NULL DEFAULT 1`을 추가한다.
+`operator_set_hash`, `profile_hash`, `universe_hash`, `dataset_hashes`, `policy_hashes`, `schema_hashes`, and `code_hash` must have the full transitive semantic coverage defined in Architecture §3.1. Stored display labels/comments are non-semantic and cannot be read as a substitute for the reviewed canonical resource.
 
-## 3. ERD
+## 3. Entity relationships
 
 ```mermaid
 erDiagram
-    MANDATES ||--o{ QUESTIONS : contains
-    MANDATES ||--o| RESEARCH_PROGRAMS : builds
-    QUESTIONS ||--o{ HYPOTHESES : derives
-    HYPOTHESES ||--o{ STRATEGIES : compiles
-    STRATEGIES ||--o{ EXPERIMENTS : runs
-    EXPERIMENTS ||--o| VALIDATIONS : receives
-    STRATEGIES ||--o| REGISTRY_ENTRIES : ends_in
-    MANDATES ||--o{ JOBS : executes
-    EXPERIMENTS ||--o{ ARTIFACTS : produces
-    MANDATES ||--o{ SEARCH_EVENTS : records
-    MANDATES ||--o| HOLDOUT_ACCESSES : consumes
-    CAPABILITY_SNAPSHOTS ||--o{ MANDATES : freezes
-    KNOWLEDGE_SOURCES ||--o{ CLAIMS : supports
-    MANDATES ||--o{ FAILURE_MEMORIES : records
+    CAPABILITY_SNAPSHOTS ||--o{ GENERATION_REQUESTS : pins
+    KNOWLEDGE_PACKS ||--o{ GENERATION_REQUESTS : pins
+    GENERATION_REQUESTS ||--o{ GENERATION_ATTEMPTS : records
+    SEARCH_SPECS ||--o{ SEARCH_RUNS : defines
+    CANDIDATE_UNIVERSES ||--o{ SEARCH_RUNS : bounds
+    SEARCH_RUNS ||--o{ SEARCH_GENERATION_PARENT_POOLS : freezes
+    SEARCH_RUNS ||--o{ CANDIDATE_TRIALS : starts
+    CANDIDATE_TRIALS ||--o{ CANDIDATE_TRIAL_EVENTS : appends
+    SEARCH_RUNS ||--o| PBO_CERTIFICATES : certifies
+    LINEAGES ||--o| HOLDOUT_SLOTS : owns
+    VALIDATIONS ||--o| PUBLICATIONS : publishes
+    PUBLICATIONS ||--o{ ARTIFACT_LINKS : links
+    PUBLICATIONS ||--o| REGISTRY_ENTRIES : exposes
+    LINEAGES ||--o{ PUBLICATION_REJECTIONS : records
+    JOBS ||--o{ PUBLICATION_OWNER_EVENTS : owns
 ```
 
-## 4. Table 정의
+Knowledge source/claim/pack, mandate, typed StrategySpec, DataBundle and Experiment tables remain immutable revision resources. A StrategySpec has exactly one primary `domain` and a matching typed payload schema. Each DataBundle manifest records point-in-time availability, columns/types/units, row/content hashes and version. Each execution policy resource records every cost, latency, fill, slippage, impact, borrow, funding and accounting value/version. Missing or unpinned inputs never create an Experiment/Trial.
 
-### 4.1 `schema_versions`
+## 4. Ownership and append-only tables
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `version` | INTEGER | N | PK, migration sequence |
-| `name` | TEXT | N | UNIQUE |
-| `checksum` | TEXT | N | migration file SHA-256 |
-| `applied_at` | TEXT | N | UTC timestamp |
+### 4.1 `generation_requests`, owner events and attempts
 
-이 table은 application migration runner만 쓴다.
+`generation_requests` is keyed by `generation_request_id` and has `request_hash TEXT UNIQUE`, `capability_snapshot_hash`, `knowledge_pack_hash`, exact `claim_pins_json`, `provider_chain_json`, `request_json`, `state`, `owner_token`, `owner_job_id`, `lease_epoch`, `lease_expires_at`, `next_ordinal`, `accepted_artifact_id`, `row_version` and common provenance.
 
-### 4.2 `capability_snapshots`
+| constraint | required rule |
+| --- | --- |
+| state | `AVAILABLE/RUNNING/ACCEPTED/FAILED` |
+| initial row | unique request insert is `AVAILABLE`, owner null, epoch 0 |
+| final rows | `ACCEPTED` has exactly one accepted artifact; `FAILED` has none; both clear owner/token/expiry |
+| running row | owner token/job non-null, epoch >= 1 |
+| transition | update predicate includes request ID, expected state, token, epoch, row_version and, where applicable, ordinal |
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `capability_snapshot_id` | TEXT | N | PK |
-| `payload_json` | TEXT | N | dataset·engine·Lab·policy versions |
-| `created_at` | TEXT | N |  |
-| `created_by` | TEXT | N |  |
-| `schema_version` | TEXT | N |  |
-| `code_version` | TEXT | N |  |
-| `content_hash` | TEXT | N | UNIQUE |
+`generation_owner_events` is append-only: `event_id`, `generation_request_id`, `event_kind`, old/new owner job/token/epoch, `related_attempt_id`, `created_at`; kind is only `ACQUIRED`, `RELEASED_INTERRUPTED`, `TRANSFERRED`, `COMPLETED`. `TRANSFERRED` must reference the prior release event. Lease expiry alone cannot insert a transfer event.
 
-snapshot은 immutable이다.
+`generation_attempts` has `attempt_id`, `generation_request_id`, `ordinal`, provider/model/config hash copied from the pinned chain, request hash, response hash nullable, `state`, error code nullable, accepted artifact nullable, `started_at`, `terminal_at`, `owner_epoch`. `UNIQUE(generation_request_id, ordinal)` is mandatory. `STARTED` is inserted before the provider call; every persisted start has one terminal `SUCCEEDED_VALID/FAILED/INVALID/INTERRUPTED`. The guarded terminal transaction advances `next_ordinal`; acceptance additionally links the already-renamed CAS artifact and CASes request `RUNNING→ACCEPTED`. An owner-job interruption terminalizes any dangling start as `INTERRUPTED`, skips its uncertain ordinal and releases the request. An accepted request/artifact is immutable and replayable without a new attempt.
 
-### 4.3 `knowledge_sources`
+### 4.2 Finite search resources and `search_runs`
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `source_id` | TEXT | N | PK |
-| `title` | TEXT | N | 1~500자 |
-| `locator` | TEXT | N | canonical locator |
-| `available_at` | TEXT | N | point-in-time 가용 시점 |
-| `artifact_id` | TEXT | Y | FK `artifacts` |
-| `created_at` | TEXT | N |  |
-| `created_by` | TEXT | N |  |
-| `content_hash` | TEXT | N | UNIQUE |
+`candidates` stores `candidate_hash UNIQUE`, domain, `operator_set_hash`, typed `strategy_ast_json` and immutable provenance. `candidate_universe_members` has `(universe_hash, candidate_hash)` PK and `raw_hash_order`; validators require the complete list to be duplicate-free and raw-byte ascending.
 
-Index: `idx_sources_available_at(available_at)`.
+`search_specs` stores `search_spec_hash UNIQUE`, domain, every named SearchSpec field from Architecture §3.1, immutable provenance and foreign references to reviewed resources. `search_runs` has `search_run_id`, `lineage_id`, `search_spec_hash`, `universe_hash`, `profile_hash`, state, `stop_reason`, `best_candidate_hash`, `plateau_counter`, `created_at/updated_at`, `row_version`. `stop_reason` is null while running and may be normal only as `PLATEAU` or `UNIVERSE_EXHAUSTED`; cancellation/interruption/invariant failure uses failed state plus typed reason. `max_generations` is not a column or JSON field.
 
-### 4.4 `claims`
+`search_run_proposals` has `(search_run_id, candidate_hash)` PK, `generation_index`, `slot_index`, proposal event/ledger position and timestamp. `search_run_visited` has `(search_run_id, candidate_hash)` PK and `candidate_trial_id UNIQUE`. These relations are never reset, make first-admissible selection race-free, and ensure a candidate cannot create a second started trial in the same run.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `claim_id` | TEXT | N | PK |
-| `source_id` | TEXT | N | FK `knowledge_sources` |
-| `domain` | TEXT | N | Domain enum |
-| `statement` | TEXT | N | 비어 있지 않음 |
-| `related_claim_id` | TEXT | Y | FK self |
-| `relation_type` | TEXT | Y | `SUPPORTS`, `CONTRADICTS`, `LIMITS`, `REPLICATES` |
-| `available_at` | TEXT | N | source 이상 |
-| `created_at` | TEXT | N |  |
-| `created_by` | TEXT | N |  |
-| `content_hash` | TEXT | N | UNIQUE |
+### 4.3 `search_generation_parent_pools`
 
-`related_claim_id`와 `relation_type`은 둘 다 null이거나 둘 다 non-null이다. 자기 자신을 참조하지 않는다. Index: `idx_claims_domain_available(domain, available_at)`.
+| column | constraint |
+| --- | --- |
+| `search_run_id`, `generation_index` | composite PK; generation index >= 1 |
+| `ordered_candidate_hashes_json` | exact eligible rank order, not a set |
+| `parent_pool_digest` | `AF:PARENT_POOL:1` digest, UNIQUE with run/generation |
+| `profile_hash`, `search_spec_hash` | must equal the SearchRun pinned hashes |
+| `created_at` | generation-start transaction timestamp |
 
-### 4.5 `failure_memories`
+The row is inserted once before slot 0. It contains only trials terminal before that transaction, `EVALUATED`, all hard gates passed and complete finite quantized vectors. Ranking uses frozen profile lexicographic order/directions then raw candidate hash ascending; retained size is `min(parent_pool_size, eligible_count)`. No update/delete or live candidate ranking query is permitted for a generation. An empty stored ordered list is valid and forces direct fallback.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `failure_memory_id` | TEXT | N | PK |
-| `mandate_id` | TEXT | N | FK `mandates` |
-| `lineage_id` | TEXT | N |  |
-| `domain` | TEXT | N | Domain enum |
-| `stage` | TEXT | N | `QUESTION/STRATEGY/ENGINE/VALIDATION` |
-| `resource_type`, `resource_id` | TEXT | N | 실패 resource 논리 참조 |
-| `reason_code` | TEXT | N | machine-readable code |
-| `summary` | TEXT | N | sealed 상세를 제거한 설명 |
-| `created_at`, `created_by` | TEXT | N |  |
-| `content_hash` | TEXT | N | UNIQUE |
+### 4.4 `candidate_trials`, events and folds
 
-Index: `idx_failure_domain_reason(domain, reason_code)`와 `idx_failure_lineage(lineage_id)`. append-only이며 generation context에는 `summary`와 `reason_code`만 제공한다.
+`candidate_trials` has `candidate_trial_id`, `search_run_id`, `candidate_hash`, immutable `parent_hashes_json`, `operator_id`, `parameter_indices_json`, `generation_index`, `slot_index`, `ledger_position`, `started_at`, terminal kind/time nullable, score vector nullable, hard-gate result, `row_version`. Constraints are `UNIQUE(search_run_id, ledger_position)`, `UNIQUE(search_run_id, generation_index, slot_index)`, `UNIQUE(search_run_id, candidate_hash)` and one candidate/operator relation per trial. Its creation transaction allocates the next contiguous ledger position, inserts `STARTED` and the matching event.
 
-### 4.6 `mandates`
+`candidate_trial_events` is append-only with `trial_event_id`, `candidate_trial_id`, per-trial sequence, `event_kind`, immutable evidence JSON, timestamp. Candidate-alternative events are `INVALID`, `OUTSIDE_UNIVERSE`, `DUPLICATE`, `DIRECT_FALLBACK`, `SLOT_EXHAUSTED`; trial terminal events are exactly `EVALUATED`, `REJECTED_PREFLIGHT`, `REJECTED_HARD_GATE`, `ENGINE_FAILED`, `INTERRUPTED`. A start must receive exactly one terminal; startup detects dangling starts, appends `INTERRUPTED`, and fails the SearchRun. An unconsumed iterator alternative has no row.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `mandate_id` | TEXT | N | PK |
-| `mode` | TEXT | N | MandateMode enum |
-| `domain_hint` | TEXT | Y | Domain enum |
-| `objective` | TEXT | N | 1~4000자 |
-| `request_json` | TEXT | N | 정규화된 전체 Mandate |
-| `capability_snapshot_id` | TEXT | N | FK `capability_snapshots` |
-| `lineage_id` | TEXT | N | 연구 계보 UUID |
-| `status` | TEXT | N | `ACCEPTED/RUNNING/COMPLETED/REJECTED/FAILED/CANCELLED` |
-| `failure_code` | TEXT | Y | terminal failure/rejection only |
-| `created_at`, `updated_at` | TEXT | N |  |
-| `created_by` | TEXT | N |  |
-| `schema_version`, `code_version` | TEXT | N |  |
-| `content_hash` | TEXT | N | immutable request hash |
-| `row_version` | INTEGER | N | `>=1` |
+`candidate_trial_folds` has `(candidate_trial_id, fold_id)` PK, metric vector JSON, hard-gate outcome, complete/finite flag and immutable evidence hash. Values are quantized only by the pinned profile. The DB does not synthesize folds or scores for non-evaluable terminals.
 
-Unique: `content_hash, capability_snapshot_id`의 조합. Index: `idx_mandates_status_created(status, created_at)`과 `idx_mandates_lineage(lineage_id)`.
+### 4.5 `pbo_certificates`
 
-### 4.7 `questions`
+`pbo_certificates` has `search_run_id UNIQUE`, `profile_hash`, `started_trial_ids_json`, `terminal_trial_ids_json`, `eligible_trial_ids_json`, `matrix_trial_ids_json`, expected/observed fold IDs JSON, counts, certificate artifact hash, `decision`, reason code and provenance. Before `PASS`, validator requires exact set/count equality `started=terminal`, `eligible=matrix`, every eligible trial fold set equals the profile fold set, no duplicate/missing/non-finite value, normal SearchRun stop and the profile minimum eligible count. Complete finite `EVALUATED` rows are initially eligible; a profile-listed `REJECTED_HARD_GATE` may qualify only with identical complete folds. Any violation is persisted as `FAIL/AF-PBO-INCOMPLETE`; it cannot be overwritten to pass and blocks holdout/publication.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `question_id` | TEXT | N | PK |
-| `mandate_id` | TEXT | N | FK `mandates` |
-| `domain` | TEXT | N | Domain enum |
-| `payload_json` | TEXT | N | 공통 외피 + 판별형 payload |
-| `audit_json` | TEXT | N | gate 결과와 reason code |
-| `status` | TEXT | N | `CANDIDATE/APPROVED/REJECTED` |
-| `created_at`, `created_by` | TEXT | N |  |
-| `schema_version`, `code_version` | TEXT | N |  |
-| `content_hash` | TEXT | N |  |
-| `parent_id` | TEXT | Y | FK self |
+## 5. Validation, holdout and disclosure
 
-Unique: `(mandate_id, content_hash)`. Index: `idx_questions_mandate_status(mandate_id, status)`.
+`validations` is immutable and has `validation_id`, strategy/candidate relation, `lineage_id`, `profile_hash`, pre-validation decision, gate/fold summary, `pbo_certificate_id`, content hash and provenance. A passing validation does not itself expose a strategy.
 
-### 4.8 `research_programs`
+`lineages` has `lineage_id`, status `OPEN/CLOSED`, `closed_at`, close reason and immutable root references. `holdout_slots` has `lineage_id PRIMARY KEY`, `profile_hash`, state `UNUSED/CONSUMED`, `consumed_at`, consuming validation ID, selector hash only, `row_version`. There is one slot per lineage and no `approved_by` or user-controlled retry state.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `program_id` | TEXT | N | PK |
-| `mandate_id` | TEXT | N | FK, UNIQUE |
-| `nodes_json` | TEXT | N | node IDs, kind, budget |
-| `edges_json` | TEXT | N | from/to; DAG 검증 완료 |
-| `created_at`, `created_by` | TEXT | N |  |
-| `schema_version`, `code_version` | TEXT | N |  |
-| `content_hash` | TEXT | N | UNIQUE |
+Automatic holdout consumption is one `BEGIN IMMEDIATE` transaction: verify validation profile/certificate pass and open lineage; verify `UNUSED` slot; update it to `CONSUMED`; close the lineage; append an immutable holdout-consumed event; commit. Only then can code open sealed data. Rollback before commit permits no access; commit consumes/closes forever irrespective of result, crash or job failure. `UNIQUE(lineage_id)` and state CAS enforce one-shot use.
 
-Application은 저장 전 cycle detection을 수행한다.
+`holdout_disclosure_policies` is an immutable, profile-hashed resource containing only allowed named aggregate decision/metric/threshold fields. It never stores sealed selectors, rows, revealing ranges, per-observation returns, folds, detailed traces or reconstructive values. Reporting tables/services have no FK/input path back to knowledge, generation, failure memory, SearchRun, ranking, PBO or any lineage-mutating command.
 
-### 4.9 `hypotheses`
+## 6. Publication, registry and internal rejections
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `hypothesis_id` | TEXT | N | PK |
-| `question_id` | TEXT | N | FK `questions` |
-| `payload_json` | TEXT | N | prediction, mechanism, falsification |
-| `created_at`, `created_by` | TEXT | N |  |
-| `schema_version`, `code_version` | TEXT | N |  |
-| `content_hash` | TEXT | N |  |
-| `parent_id` | TEXT | Y | FK self |
+### 6.1 `publications` and owner events
 
-Unique: `(question_id, content_hash)`.
+`publications` has `publication_id`, `validation_id UNIQUE`, strategy/candidate and lineage IDs, state, owner token/job, owner epoch, owner expiry, attempt count, `row_version`, prepared orphan hash JSON nullable, failure kind nullable, timestamps. State is only `AVAILABLE/PREPARING/PUBLISHED/FAILED_RETRYABLE`.
 
-### 4.10 `strategies`
+- `AVAILABLE` insert is unique by validation ID. CAS from `AVAILABLE` or `FAILED_RETRYABLE` to `PREPARING` requires a fresh token/job/epoch and appends `ACQUIRED`.
+- `PUBLISHED` is immutable and ownerless. `FAILED_RETRYABLE` is ownerless and only permits `ARTIFACT_IO`, `REPORT_RENDER`, `STORAGE_COMMIT`, `OWNER_INTERRUPTED`.
+- `publication_owner_events` is append-only with `ACQUIRED`, `RELEASED_STALE`, `FAILED_ATTEMPT`, `PUBLISHED`; it records owner job/epoch and orphan hash where relevant. A live `PREPARING` owner is never stolen merely because expiry passed.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `strategy_id` | TEXT | N | PK |
-| `hypothesis_id` | TEXT | N | FK `hypotheses` |
-| `domain` | TEXT | N | Domain enum |
-| `engine_key` | TEXT | N | capability에 존재 |
-| `payload_json` | TEXT | N | domain StrategySpec |
-| `created_at`, `created_by` | TEXT | N |  |
-| `schema_version`, `code_version` | TEXT | N |  |
-| `content_hash` | TEXT | N |  |
-| `parent_id` | TEXT | Y | FK self |
+`publication_rejections` is append-only and idempotent by validation/input hash. It has no Publication FK because invalid work creates no Publication. Reason is only `VALIDATION_NOT_PASS`, `LINEAGE_NOT_CLOSED`, `DISCLOSURE_INVALID`, `INPUT_HASH_MISMATCH`.
 
-Unique: `(hypothesis_id, content_hash)`. Index: `idx_strategies_domain(domain)`.
+### 6.2 Reports, artifacts and PUBLISHED-only reads
 
-### 4.11 `experiments`
+`artifacts` has `artifact_id`, CAS URI UNIQUE, content hash, byte size, media type, created provenance. `artifact_links` has `artifact_id`, `owner_type`, `owner_id`, role and `UNIQUE(owner_type, owner_id, role)`. Publication roles include `RESEARCH_REPORT_JSON` and `RESEARCH_REPORT_HTML`.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `experiment_id` | TEXT | N | PK |
-| `strategy_id` | TEXT | N | FK `strategies` |
-| `mandate_id` | TEXT | N | FK `mandates` |
-| `fingerprint` | TEXT | N | UNIQUE |
-| `config_json` | TEXT | N | immutable normalized config |
-| `status` | TEXT | N | ExperimentStatus enum |
-| `result_json` | TEXT | Y | `SUCCEEDED` only |
-| `result_hash` | TEXT | Y | `SUCCEEDED` only |
-| `error_code` | TEXT | Y | `FAILED` only |
-| `created_at`, `updated_at` | TEXT | N |  |
-| `created_by` | TEXT | N |  |
-| `schema_version`, `code_version` | TEXT | N |  |
-| `row_version` | INTEGER | N | `>=1` |
+`registry_entries` contains only pass entries: `registry_entry_id`, `publication_id UNIQUE`, `validation_id UNIQUE`, strategy/candidate ID, lineage ID, created provenance. It has no client-settable approval state. `published_strategy_view` joins RegistryEntry, Publication, validation and allowed report metadata with the fixed predicate `publications.state='PUBLISHED'`; all public strategy/report queries use this view. A publication in any other state is invisible.
 
-Check는 status와 result/error nullability를 강제한다. Index: `idx_experiments_mandate_status(mandate_id, status)`.
+`rejection_registry` is append-only internal evidence: `rejection_id`, lineage/candidate/strategy/validation relation, terminal stage, reason code, redacted summary, artifact/evidence references, timestamp. Internal rejection queries may read it; public views do not. Neither table contains sealed selector/detail.
 
-### 4.12 `validations`
+The successful publication transaction has one matching `PREPARING/token/epoch/row_version` predicate and atomically inserts JSON/HTML artifact metadata/link, pass RegistryEntry, `PUBLISHED` state/event and exact owner job `RUNNING→SUCCEEDED` with immutable result link. Any failure rolls all of these back. No final-batch follow-up transaction may publish a half-complete result.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `validation_id` | TEXT | N | PK |
-| `experiment_id` | TEXT | N | FK, UNIQUE |
-| `rule_set_version` | TEXT | N |  |
-| `decision` | TEXT | N | `PASS/FAIL` |
-| `gates_json` | TEXT | N | rule별 결과 |
-| `created_at`, `created_by` | TEXT | N |  |
-| `content_hash` | TEXT | N | UNIQUE |
+## 7. Jobs, idempotency and startup recovery
 
-validation은 immutable이다. 재검증은 새 experiment를 요구한다.
+`jobs` has `job_id`, kind `GENERATE/RUN_SEARCH/PUBLISH/...`, resource ID, status `QUEUED/RUNNING/SUCCEEDED/FAILED/CANCELLED`, stage, immutable input/command fingerprint, result reference nullable, error JSON nullable, lifecycle timestamps, `row_version`. `idempotency_keys` maps operation + key to canonical request hash and job/final response; a changed body is a conflict.
 
-### 4.13 `registry_entries`
+At every process startup, before worker acquisition, one transaction changes **every persisted** `RUNNING` job to `FAILED`, sets `AF-JOB-INTERRUPTED`, clears active execution ownership and sets `finished_at`. There is no exception for stage, lease, artifact or publication. In the same recovery flow a `PREPARING` publication owned by that failed job becomes `FAILED_RETRYABLE/OWNER_INTERRUPTED`, records old job/epoch/orphan hashes and appends `RELEASED_STALE` plus `FAILED_ATTEMPT`. A `PUBLISHED` publication remains PUBLISHED even when its legacy owner job is changed from RUNNING to FAILED; it is never auto-marked success. Completed fingerprints, accepted artifacts, consumed holdouts and PUBLISHED rows are never reopened.
 
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `registry_entry_id` | TEXT | N | PK |
-| `strategy_id` | TEXT | N | FK, UNIQUE |
-| `validation_id` | TEXT | N | FK `validations` |
-| `entry_type` | TEXT | N | `STRATEGY/REJECTION` |
-| `state` | TEXT | N | RegistryState enum |
-| `reason_codes_json` | TEXT | N | JSON array; PASS는 `[]` |
-| `created_at`, `updated_at` | TEXT | N |  |
-| `created_by` | TEXT | N |  |
-| `row_version` | INTEGER | N | `>=1` |
+## 8. Enforcement matrix
 
-Index: `idx_registry_type_state(entry_type, state)`.
+| DB-enforced | application transaction/validator-enforced |
+| --- | --- |
+| PK/FK, unique request/hash/version, enum CHECK, row-version predicates, unique ordinal, unique parent-pool generation, unique trial slot/ledger/candidate, one lineage slot, validation-publication uniqueness | AF-CANON bytes/transitive resource coverage, schema validation, exact owner token/epoch/version state transition, terminal event cardinality, contiguous ledger allocation, frozen rank eligibility, finite iterator order, PBO set/fold equalities, disclosure allowlist, no-feedback architecture |
+| artifact URI/hash identity, report role uniqueness, PUBLISHED registry uniqueness, publication retry-kind CHECK | holdout `BEGIN IMMEDIATE` pre-access order, artifact atomic rename before metadata, publication/report/job atomic commit, unconditional startup transition |
 
-### 4.14 `search_events`
-
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `search_event_id` | TEXT | N | PK |
-| `mandate_id` | TEXT | N | FK `mandates` |
-| `lineage_id` | TEXT | N |  |
-| `event_kind` | TEXT | N | `CREATE/MODIFY/EVALUATE/REJECT` |
-| `resource_type`, `resource_id` | TEXT | N | 논리 참조 |
-| `change_json` | TEXT | N | 변경 field와 이유 |
-| `created_at`, `created_by` | TEXT | N |  |
-
-append-only다. Index: `idx_search_lineage_created(lineage_id, created_at)`.
-
-### 4.15 `holdout_accesses`
-
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `holdout_access_id` | TEXT | N | PK |
-| `lineage_id` | TEXT | N | UNIQUE |
-| `mandate_id` | TEXT | N | FK `mandates` |
-| `experiment_id` | TEXT | N | FK `experiments`, UNIQUE |
-| `selector_hash` | TEXT | N | selector 원문 저장 금지 |
-| `approved_by` | TEXT | N | Reviewer actor |
-| `consumed_at` | TEXT | N | 예약 시점; 복구 시 되돌리지 않음 |
-
-insert는 `BEGIN IMMEDIATE` transaction에서 실행한다. `lineage_id` UNIQUE 충돌은 `AF-HOLDOUT-001`이다.
-
-### 4.16 `artifacts`
-
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `artifact_id` | TEXT | N | PK |
-| `experiment_id` | TEXT | Y | FK `experiments` |
-| `role` | TEXT | N | `RESULT/PNL/POSITIONS/DIAGNOSTICS/REPORT/SOURCE` |
-| `storage_uri` | TEXT | N | UNIQUE |
-| `content_hash` | TEXT | N | SHA-256 |
-| `byte_size` | INTEGER | N | `>=0` |
-| `media_type` | TEXT | N |  |
-| `created_at`, `created_by` | TEXT | N |  |
-
-Unique: `(content_hash, role, experiment_id)`.
-
-### 4.17 `jobs`
-
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `job_id` | TEXT | N | PK |
-| `kind` | TEXT | N | `RUN_MANDATE/RUN_EXPERIMENT/SEALED_EVALUATION` |
-| `resource_id` | TEXT | N | command 대상 |
-| `status` | TEXT | N | JobStatus enum |
-| `stage` | TEXT | Y | 현재 application stage |
-| `input_json` | TEXT | N | immutable command |
-| `progress_json` | TEXT | N | 기본 `{}` |
-| `error_json` | TEXT | Y | `FAILED` only |
-| `created_at`, `updated_at` | TEXT | N |  |
-| `started_at`, `finished_at` | TEXT | Y | 상태와 일치 |
-| `row_version` | INTEGER | N | `>=1` |
-
-Index: `idx_jobs_status_created(status, created_at)`. MVP 단일 Worker는 가장 오래된 `QUEUED` row를 선택해 transaction 안에서 `RUNNING`으로 바꾼다.
-
-### 4.18 `idempotency_keys`
-
-| 컬럼 | 타입 | Null | 제약 |
-| --- | --- | --- | --- |
-| `idempotency_key` | TEXT | N | PK |
-| `operation` | TEXT | N | route 또는 command name |
-| `request_hash` | TEXT | N |  |
-| `job_id` | TEXT | Y | FK `jobs` |
-| `response_json` | TEXT | Y | 동기 command 결과 |
-| `created_at`, `expires_at` | TEXT | N |  |
-
-같은 key의 request hash가 다르면 충돌이다. Index: `idx_idempotency_expires(expires_at)`.
-
-## 5. 무결성 규칙
-
-DB가 직접 강제한다.
-
-- PK, FK, UNIQUE, enum CHECK, status별 nullability
-- experiment fingerprint 유일성
-- lineage별 holdout access 1회
-- strategy별 registry entry 1개
-- mandate별 program 1개
-
-Application transaction이 강제한다.
-
-- domain과 payload discriminator 일치
-- Program DAG 비순환
-- capability snapshot에 dataset·engine·policy 존재
-- point-in-time 가용성
-- 상태 전이 허용 여부와 row version
-- JSON schema validation과 canonical hash
-
-## 6. Artifact Layout
+## 9. CAS layout, retention and migration
 
 ```text
-artifacts/
-└── sha256/
-    └── ab/
-        └── cdef.../
-            ├── payload
-            └── manifest.json
+artifacts/sha256/ab/cdef.../
+├── payload
+└── manifest.json
 ```
 
-쓰기 순서:
+Write sequence is temporary same-filesystem write, byte/hash validation, atomic rename to hash path, then DB metadata/owner transaction. Hash reuse validates byte size/media type. Attempt/trial/owner event, holdout consumption, parent-pool snapshot, fingerprint, lineage closure and PUBLISHED authority are permanent. Failed job detail may be redacted after 90 days while code/timestamp remain; idempotency keys may expire after 24 hours; unreferenced temporary files may be removed after 24 hours.
 
-1. 같은 filesystem의 임시 파일에 쓴다.
-2. byte 수와 SHA-256을 검증한다.
-3. 최종 hash 경로로 atomic rename한다.
-4. DB transaction에 artifact metadata와 owner reference를 기록한다.
-
-기존 hash가 있으면 byte와 media type을 검증한 후 재사용한다.
-
-## 7. Index와 Partition
-
-MVP는 예상 row 수가 작고 SQLite 단일 파일이므로 table partition을 사용하지 않는다. 위에서 명시한 조회 index만 생성한다. JSON 전체에 범용 index를 만들지 않는다.
-
-Beta PostgreSQL에서 다음 조건을 모두 충족할 때만 월별 partition을 도입한다.
-
-- table 1억 row 이상 또는 100GB 이상
-- 시간 범위 query가 전체 조회의 80% 이상
-- benchmark에서 partition pruning이 p95를 30% 이상 개선
-
-조건을 충족하기 전에는 partition을 추가하지 않는다.
-
-## 8. 데이터 보존 정책
-
-| 데이터 | MVP/Beta 보존 | 삭제 규칙 |
-| --- | --- | --- |
-| Mandate·Question·Strategy·Validation·Registry | 영구 | project 삭제 승인에서만 제거 |
-| Search event·Holdout access | 영구 | 수정·개별 삭제 금지 |
-| 성공 experiment metadata | 영구 | artifact 삭제 후에도 hash·metric 보존 |
-| 실패 job 상세 | 90일 | error 전문 제거, code·timestamp 보존 |
-| idempotency key | 24시간 | 만료 cleanup 가능 |
-| 임시 artifact | 24시간 | DB 참조가 없을 때 삭제 |
-| PnL·position artifact | 1년 | legal/research hold면 보존 |
-
-삭제 작업은 dry-run 목록과 삭제 결과 hash를 log에 기록한다.
-
-## 9. Backup과 Recovery
-
-- SQLite: application write 중지 후 online backup API로 매일 snapshot, 최근 7개 보존
-- Artifact: manifest와 content hash 목록을 backup에 포함
-- 복구: 빈 디렉터리에 DB와 artifact를 복원하고 모든 artifact hash와 FK를 검증
-- 목표: MVP RPO 24시간, RTO 2시간; Production 목표는 별도 운영 승인에서 RPO 15분, RTO 1시간
-
-## 10. Migration 전략
-
-1. migration 파일은 `NNNN_description.sql`로 순차 증가한다.
-2. 적용 전 현재 schema version과 checksum을 확인한다.
-3. migration은 transaction 안에서 실행하고 성공 후 `schema_versions`에 기록한다.
-4. 기존 migration 파일은 수정하지 않는다.
-5. destructive change는 expand → backfill → application switch → contract의 네 release 단계로 수행한다.
-6. JSON schema 변경은 row의 `schema_version`을 유지하며 read adapter가 지원 version을 명시한다.
-7. CI는 빈 DB migration과 직전 release fixture upgrade를 모두 실행한다.
-
-SQLite에서 PostgreSQL로 전환할 때 dual-write를 사용하지 않는다. maintenance window에 export → hash 검증 → import → row count/FK/hash 검증 → endpoint smoke 순서로 전환한다.
+Migrations are ordered `NNNN_description.sql`, transactional, checksum-recorded and never edited after application. Incompatible rollback restores a verified backup; destructive change uses expand → backfill → application switch → contract. SQLite-to-PostgreSQL migration is maintenance-window export → hash verification → import → row/FK/hash verification, not dual-write.

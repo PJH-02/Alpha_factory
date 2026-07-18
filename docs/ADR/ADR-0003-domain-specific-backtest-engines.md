@@ -9,7 +9,7 @@
 
 ## Decision
 
-모든 engine은 `validate_config`와 `run(config, data) -> result` 계약만 공유한다. Factor는 Panel Portfolio Engine, StatArb는 Multi-Leg Sequential Engine을 사용한다. 나머지 domain은 MVP에서 계약 smoke engine을 사용하고 Beta에서 전용 engine으로 교체한다. Engine Registry가 명시적 key/version으로 선택한다.
+모든 engine은 `validate_config`와 `run(config, data) -> result` 계약만 공유한다. Factor, StatArb, Market Making, Structural Flow, Cross Venue, Derivatives, Event Fundamental, Time Series는 각각 고유한 clock·fill·비용·회계 정책을 가진 연구급 수치 engine을 사용한다. Engine Registry가 명시적 key/version으로 선택한다.
 
 ## 고려한 대안
 
@@ -17,7 +17,7 @@
 | --- | --- |
 | 단일 범용 engine | 도메인별 clock·fill·회계 차이를 숨김 |
 | plugin 없이 직접 호출 | routing·capability·version 추적이 어려움 |
-| MVP에서 8개 완전 구현 | 4일 범위에서 수치 신뢰성을 확보할 수 없음 |
+| 8개 engine을 별도 service로 분리 | 단일 Worker·SQLite 범위에서 배포·일관성 비용만 늘어남 |
 
 ## Consequences
 

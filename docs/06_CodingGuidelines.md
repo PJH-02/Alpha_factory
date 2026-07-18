@@ -3,250 +3,118 @@
 상태: Approved  
 대상: 사람과 모든 AI 개발 에이전트
 
-## 1. 우선순위
+## 1. 권위와 우선순위
 
-규칙 충돌 시 다음 순서를 적용한다.
+규칙 충돌은 승인 ADR, [02_Architecture.md](./02_Architecture.md), [04_API.md](./04_API.md), [05_Database.md](./05_Database.md), 이 문서, library convention 순으로 해석한다. contract 변경은 구현 우회가 아니라 같은 변경에서 권위 문서와 test vector를 갱신하는 일이다.
 
-1. 승인된 ADR
-2. API·Database의 명시적 계약
-3. Architecture 의존성 규칙
-4. 이 문서
-5. 사용 library의 기본 관례
+다음은 절대 바꾸거나 약화하지 않는다: immutable resource/version/hash, attempt/trial/event history, completed fingerprint, parent-pool snapshot, holdout consumption/lineage closure, PUBLISHED authority. 수정은 additive migration과 새 resource/revision으로 한다.
 
-계약 변경이 필요하면 코드를 우회하지 말고 권위 문서를 같은 PR에서 변경한다.
+## 2. Toolchain과 기본 코드 규칙
 
-## 2. Toolchain
+| 목적 | 규칙 |
+| --- | --- |
+| Runtime | Python 3.12만 사용한다. |
+| Package | `uv.lock`을 pin하고 `uv lock --check`, `uv sync --locked --group dev`, 이후 `uv run --locked --no-sync ...`를 사용한다. |
+| Schema | Pydantic v2; public input은 `extra="forbid"`이다. |
+| Numeric | money/rate/fee는 `Decimal`; float와 NaN/Infinity persistence/API를 금지한다. |
+| CLI | stdlib `argparse`; REST와 같은 application command/query DTO를 만든다. |
+| Quality | Ruff, mypy strict, pytest, contract vector와 architecture check를 warning 무시 없이 사용한다. |
 
-| 목적 | 도구 | 필수 명령 |
-| --- | --- | --- |
-| Runtime | Python 3.12 | `python --version` |
-| Package | `uv` | `uv sync --frozen` |
-| Format/Lint | Ruff | `uv run ruff format --check .`, `uv run ruff check .` |
-| Type | mypy strict | `uv run mypy src` |
-| Test | pytest | `uv run pytest` |
-| Schema | Pydantic v2 | OpenAPI/JSON Schema generation |
-| Migration | SQL files + runner | 빈 DB·upgrade test |
+module/function/variable은 `snake_case`, class/protocol은 `PascalCase`, enum/constant는 `UPPER_SNAKE_CASE`다. `data`, `manager`, `helper`, `util`, `process` 같은 책임 없는 public 이름을 쓰지 않는다. public parameter/return type을 명시하고 `Any`, untyped dict, broad `# type: ignore`는 좁은 사유 없이는 금지한다.
 
-CI와 로컬 명령은 동일해야 한다. warning을 무시해 합격시키지 않는다.
+## 3. Architecture and interface rules
 
-## 3. Naming Convention
+- `domain`은 standard library와 pure value object만 의존한다. application service는 repository/provider 구현이 아닌 port를 받는다. composition은 `bootstrap.py`에서만 한다.
+- REST route와 CLI command는 input을 validate/normalize한 뒤 같은 application service를 정확히 한 번 호출한다. route/CLI가 repository, CAS, engine, provider를 직접 호출하거나 state machine을 재구현하지 않는다.
+- application service는 command fingerprint를 동일 canonical DTO, pinned resource hash, schema/code version에서 계산한다. 같은 input은 REST/CLI에서 같은 fingerprint/result여야 한다.
+- Lab은 하나의 primary `Domain`의 typed schema/compiler/engine contract만 소유한다. Lab 간 internal import, generic optional-field mega-model, composition package/API/schema는 금지한다.
+- Engine은 LLM, HTTP, DB, application service를 호출하지 않는다. explicit immutable config/data/policy만 읽고 결과/artifact DTO를 반환한다.
+- reporting/disclosure module은 knowledge, generation, failure-memory, search, ranking, PBO 또는 lineage-mutating module을 import하지 않는다. 역방향 import도 금지한다.
 
-| 대상 | 규칙 | 예 |
-| --- | --- | --- |
-| module/function/variable | `snake_case` | `compile_experiment` |
-| class/protocol | `PascalCase` | `ExperimentEngine` |
-| constant/enum member | `UPPER_SNAKE_CASE` | `QUESTION_SPECIFIED` |
-| private symbol | 앞에 `_` | `_normalize_policy` |
-| ID type | entity 이름 + `Id` | `MandateId` |
-| domain plugin key | API Domain enum | `STAT_ARB` |
-| engine key | lowercase kebab | `panel-portfolio` |
-| event/error/test ID | 문서 규칙 | `experiment.completed`, `AF-STATE-001`, `UT-DOM-001` |
+## 4. Schema, canonical identity and immutable resources
 
-`data`, `manager`, `helper`, `util`, `process`처럼 책임이 불명확한 public 이름을 사용하지 않는다.
+외부 JSON은 typed discriminator union과 `extra="forbid"`로 검증한다. domain payload discriminator는 primary domain과 같아야 한다. timestamp는 timezone-aware UTC, 기간은 `start <= t < end`, 단위는 `latency_ms`, `AnnualBps`처럼 이름/type에 포함한다.
 
-## 4. Architecture Rules
+모든 AF-CANON digest는 [Architecture §3.1](./02_Architecture.md#31-af-canon-identity-registry)를 byte-for-byte 구현한 하나의 `DigestRegistry`를 통해서만 계산한다.
 
-- `domain`은 표준 library와 순수 value object만 의존한다.
-- application use case는 repository나 provider 구현이 아니라 port를 받는다.
-- adapter 조립은 `bootstrap.py`에서만 수행한다.
-- API route는 request 변환 후 application service 한 개를 호출한다.
-- repository는 business rule을 만들지 않는다.
-- engine은 I/O·LLM·DB를 호출하지 않는다.
-- Lab은 다른 Lab 내부를 import하지 않는다.
-- cross-domain 데이터는 [ADR-0008](./ADR/ADR-0008-cross-domain-composition.md)의 interface를 통한다.
+- SHA-256 preimage는 domain separator, NUL, u32 field count, named field encoding이다. field name은 UTF-8 byte sort, parameter name은 ASCII sort다.
+- integer는 minimal base-10 ASCII, Decimal은 normalized non-exponent ASCII/no negative zero, string은 NFC UTF-8, timestamp는 UTC microsecond RFC3339, hash는 raw bytes다. list order는 semantic declared order이며 object는 recursively named-field sorted다.
+- type tag, length prefix, unknown identity field rejection을 개별 caller가 구현하지 않는다. canonical JSON is not a substitute for AF-CANON binary identity encoding.
+- Candidate, Universe, SearchSpec, Traversal, Parent alternative, Parameter alternative, ParentPool, GenerationRequest의 exhaustive field를 줄이거나 default/optional implementation field를 추가하지 않는다. `max_generations`는 금지한다.
+- semantic resource hash는 full transitive dependencies를 포함한다: operator arity/commutativity/compiler version/parameter type-grid-order/validity/schema; profile score definition/direction/quantization/order/gate/tie-break/patience/folds/PBO/disclosure; universe member/order/version; dataset PIT/manifest; policy value; schema; code identity. semantic change는 resource and SearchSpec digest를 바꿔야 한다.
+- comments, display labels와 non-semantic metadata는 digest에 넣지 않는다. hash tuple/string을 정렬할 때 raw bytes/명시된 canonical encoded value order를 사용하며 locale/default Python ordering을 쓰지 않는다.
 
-순환 import와 내부 module 직접 import는 architecture test로 차단한다.
+Canonical encoder와 resource validator는 Windows/Linux golden encoded bytes/digest fixture를 공유한다. semantic mutation contract test는 direct SearchSpec field와 각 transitive semantic component 변이가 해당 resource hash와 SearchSpec hash를 바꾸는지 독립적으로 검증한다.
 
-## 5. Schema와 타입
+## 5. Durable ownership, CAS and artifacts
 
-- public function의 parameter와 return에는 타입을 명시한다.
-- `Any`, untyped `dict`, `# type: ignore`는 사유와 좁은 범위가 없으면 금지한다.
-- 외부 JSON은 Pydantic model에서 `extra="forbid"`로 검증한다.
-- domain별 payload는 discriminator가 있는 union으로 선언한다.
-- money, rate, fee는 `Decimal`을 사용하고 float로 변환하지 않는다.
-- timestamp는 timezone-aware UTC만 허용한다.
-- 기간은 `start <= t < end`다.
-- 단위는 변수명 또는 value type에 포함한다: `latency_ms`, `AnnualBps`.
+상태 변경은 entity method 또는 application command 한 곳에 모으고, mutable update는 `WHERE id=? AND row_version=?`에 expected state와 owner token/epoch/ordinal을 함께 넣는다. update count가 1이 아니면 stale/concurrent authority 오류다; 재시도해서 다른 owner를 덮어쓰지 않는다.
 
-## 6. 함수와 객체
+CAS write 순서는 same-filesystem temporary write → byte/hash verification → atomic rename → matching DB metadata/owner-reference transaction이다. rename 전 artifact를 authority로 참조하지 않는다. rename 후 authority CAS 전의 file은 orphan일 수 있으며 accepted/published artifact가 아니다.
 
-- 함수는 하나의 명확한 결과를 만들고 I/O와 계산을 분리한다.
-- boolean 인자가 두 개 이상이면 command/value object로 바꾼다.
-- immutable model은 frozen 설정을 사용한다.
-- state 변경은 entity method 또는 application command 한 곳에서만 수행한다.
-- 새 revision은 원본을 mutate하지 않고 `parent_id`와 새 content hash를 만든다.
-- public interface의 기본값은 의미가 명확하고 version 간 안정적일 때만 사용한다.
+외부 call, engine work 또는 publication staging 전에 write-ahead intent와 `STARTED` event를 짧은 transaction으로 commit한다. terminal event와 authority state를 별도 best-effort write로 나누지 않는다. event row는 append-only다; delete/update로 history를 고치지 않는다.
 
-## 7. Error Handling
+## 6. GenerationRequest and ordered fallback
 
-### 7.1 계층
+GenerationService는 immutable CapabilitySnapshot의 ordered `{ordinal, provider, model, config_hash}` chain만 사용한다. base URL/model/provider를 environment default나 adapter configuration에서 묵시적으로 fallback하지 않으며, 실제 chain은 request identity/provenance에 pin한다.
 
-```text
-AlphaFoundryError
-├── SchemaError
-├── DomainError
-├── CapabilityError
-├── StateTransitionError
-├── ValidationRejected
-├── StorageError
-├── ProviderError
-└── EngineError
-```
+1. unique request hash는 `AVAILABLE`, epoch 0, owner null을 만든다. owner-null/state/version CAS만 first `ACQUIRED`를 만든다.
+2. live `RUNNING` duplicate는 existing job을 돌려주고 provider call을 하지 않는다. lease expiry는 warning일 뿐 transfer 권한이 아니다.
+3. `TRANSFERRED`는 prior `RELEASED_INTERRUPTED`과 terminal owner job을 증명하는 matching CAS에서만 가능하다. token, epoch, version, ordinal을 모두 검사한다.
+4. provider call 직전에 unique `(request_id, ordinal)` `STARTED` attempt를 insert한다. invalid/failure terminal과 ordinal advance는 하나의 guarded transaction이다.
+5. valid output은 plain JSON → typed schema/allowlist validation → hash/atomic rename 순이다. 그 뒤 `SUCCEEDED_VALID`, request `RUNNING→ACCEPTED`, artifact link, owner clear, `COMPLETED`를 한 transaction에서 CAS한다.
+6. crash로 uncertain call이 생기면 owner-job interruption이 attempt를 `INTERRUPTED`로 terminalize하고 ordinal을 skip한다. accepted artifact가 있으면 replay는 adapter call 0회다. `ACCEPTED/FAILED` request는 resubmit으로 변하지 않는다.
 
-- domain/application은 HTTP status를 알지 못한다.
-- adapter는 내부 예외를 [04_API.md](./04_API.md#9-error-code)의 error code로 매핑한다.
-- `except Exception`은 job/application 경계에서 실패를 기록한 뒤 다시 raise하거나 표준 오류로 변환할 때만 허용한다.
-- 입력 오류를 자동 보정하지 않는다. 거절 field와 reason을 반환한다.
-- 재시도는 `retryable=true`인 provider/storage 오류에만 적용한다.
-- assertion은 사용자 입력 검증에 사용하지 않는다.
+LLM은 typed question/hypothesis/strategy candidate와 allowed reason explanation만 만들 수 있다. SQL/Python/shell 실행, authority state/registry/validation/holdout 변경, policy/data 존재 판단, missing config 추정은 할 수 없다. provider SDK types, secret, raw prompt/response를 infrastructure boundary 밖으로 내보내지 않는다.
 
-## 8. Logging
+## 7. Finite deterministic SearchRun
 
-구조화 JSON log를 사용한다. 필수 field는 Architecture 14절을 따른다.
+SearchRun은 finite duplicate-free Universe, frozen SearchSpec/ValidationProfile, seed와 deterministic iterator만 사용한다. random source는 passed seed에서만 derive하고 iteration 전에 every collection ordering을 명시한다.
 
-```python
-logger.info(
-    "experiment_completed",
-    extra={
-        "correlation_id": correlation_id,
-        "job_id": str(job_id),
-        "experiment_id": str(experiment_id),
-        "stage": "engine",
-        "duration_ms": duration_ms,
-    },
-)
-```
+- generation 0은 `(TraversalDigest, candidate_hash)` 순으로 `min(P,N)`을 시작한다. generation/slot/parameter index는 zero-based다.
+- generation `g>=1` slot 0 전, terminal-before-start `EVALUATED` + all hard gates + complete finite quantized score vector만 profile lexicographic direction/order, raw candidate hash ascending으로 rank한다. `K=min(parent_pool_size, eligible_count)` exact order/hash/profile/spec digest를 immutable parent-pool row로 insert한다.
+- slot code는 live ranking query를 하지 않고 persisted pool만 읽는다. K=0/insufficient parent는 parent iterator가 empty여야 하며 direct fallback을 우회하지 않는다.
+- iterator 순서는 schedule offset ascending, prescribed schedule modulo index, Parent digest/hash, Parameter digest/vector다. mutation parent는 unique, crossover pair는 ordered distinct이며 commutative operator는 canonical one pair다.
+- consumed alternative는 `INVALID`, `OUTSIDE_UNIVERSE` 또는 `DUPLICATE` event를 남긴다. first schema-valid/in-universe/run-unseen candidate만 accepted proposal + proposed set + exactly one `STARTED` trial + visited set을 atomic commit하고 slot을 끝낸다. unconsumed alternative은 event가 없다.
+- alternatives exhaust 뒤 direct fallback은 traversal universe one pass의 first unseen candidate를 선택하고 `DIRECT_FALLBACK`, accepted proposal, proposed/visited set 및 exactly one `STARTED` trial을 atomic commit한다. 없으면 `SLOT_EXHAUSTED`. proposed/visited는 run-wide이며 reset되지 않는다.
+- slot당 0/1 trial, generation당 최대 offspring count다. `max_generations`/unbounded loop를 만들지 않는다. zero-trial generation은 plateau를 바꾸지 않고 visited=universe면 exhaustion, 아니면 invariant failure다.
+- slot은 sequential이며 evaluation order는 contiguous ledger position이다.
+- plateau counters와 stop precedence를 Architecture §3.3 그대로 구현한다. normal terminal is only `PLATEAU`/`UNIVERSE_EXHAUSTED`; cancellation/interruption is typed failure.
 
-금지되는 log:
+## 8. CandidateTrial, PBO and numeric integrity
 
-- secret, access token, credential
-- 원문 prompt·response 전문
-- dataset row와 사용자 제공 원문
-- sealed holdout selector와 metric 상세
-- 전체 stack trace의 client 반환
+preflight/engine 전에 contiguous ledger position, immutable candidate/operator relation, CandidateTrial `STARTED`, `TRIAL_STARTED` event를 one short transaction으로 write ahead 한다. Every start has exactly one of `EVALUATED`, `REJECTED_PREFLIGHT`, `REJECTED_HARD_GATE`, `ENGINE_FAILED`, `INTERRUPTED`. Startup terminalizes dangling starts and fails the run; resubmission creates a new lineage.
 
-LLM 호출은 provider, model, prompt hash, schema version, token 수, duration, status만 기록한다.
+PBO code constructs an explicit certificate, not a filtered convenience list. It compares set and count equality `started=terminal`, `eligible=matrix`; requires every eligible fold set equal to frozen profile fold set; rejects duplicate/missing/non-finite values; requires normal stop and minimum eligible count. Only complete finite EVALUATED trials are initially eligible; profile-listed hard-gate reject needs identical complete folds. Never impute scores/folds/returns. Any breach is `AF-PBO-INCOMPLETE` and prevents holdout/publication.
 
-## 9. Async와 Job 정책
+Engine code must preflight every required dataset and explicit policy; it must return a typed reason code rather than estimate missing cost/latency/fill/slippage/impact/borrow/funding/accounting input. Check accounting, position, cash, return and cost invariants at each engine step. Use stable reductions and named numeric tolerances when ordering could affect output.
 
-- HTTP route는 engine이나 LLM의 완료를 기다리지 않고 job을 반환한다.
-- MVP Worker는 process당 하나이며 SQLite writer도 하나다.
-- blocking engine은 event loop에서 직접 실행하지 않는다.
-- job은 stage 경계에서 cancellation flag를 확인한다.
-- 완료 artifact와 DB 상태는 멱등하게 commit한다.
-- process 시작 시 `RUNNING` job은 `QUEUED`로 복구하되 sealed access는 되돌리지 않는다.
-- library 내부에 숨은 background task를 만들지 않는다.
+## 9. Automatic holdout and no-feedback disclosure
 
-Beta 다중 Worker 규칙은 ADR-0007의 재검토 조건이 충족된 뒤 적용한다.
+After pre-validation and a passing complete PBO certificate, ValidationService automatically executes holdout. Do not implement manual approval, a client `run_sealed_holdout` flag, a sealed endpoint or retry/reopen path.
 
-## 10. Dependency Injection
+The only permitted order is a `BEGIN IMMEDIATE` transaction that verifies frozen profile/certificate/open lineage/unused slot, consumes slot, closes lineage and commits **before** any sealed data read. Success, fail and crash do not undo consumption. A code path that touches sealed data before that committed transaction is a release blocker.
 
-constructor injection을 기본으로 한다.
+HoldoutDisclosurePolicy is immutable/profile-pinned and emits only named aggregate decision/metric/threshold fields in final reports. Never serialize/log/pass to research input a selector, row, revealing range, per-observation return, fold, detailed trace or reconstructive value. Do not import report/disclosure output into knowledge, generation, failure memory, search, ranking, PBO or mutation services.
 
-```python
-class RunMandate:
-    def __init__(
-        self,
-        mandates: MandateRepository,
-        generator: ResearchGeneratorPort,
-        labs: LabRegistry,
-        engines: EngineRegistry,
-        clock: Clock,
-    ) -> None: ...
-```
+## 10. Publication, visibility and jobs
 
-- service locator와 module global mutable dependency를 금지한다.
-- 현재 시간, UUID, random seed, filesystem path도 port 또는 command로 전달한다.
-- test는 fake port를 명시적으로 주입한다.
+Preflight-invalid publication work appends only an idempotent internal rejection with one of `VALIDATION_NOT_PASS`, `LINEAGE_NOT_CLOSED`, `DISCLOSURE_INVALID`, `INPUT_HASH_MISMATCH`; it does not create a Publication.
 
-## 11. 결정론과 수치 규칙
+Publication state is exactly `AVAILABLE`, `PREPARING`, `PUBLISHED`, `FAILED_RETRYABLE`. Acquire by CAS from AVAILABLE/FAILED_RETRYABLE with fresh token/job/epoch/attempt and append `ACQUIRED`. Live `PREPARING` duplicate returns owner job; expiry alone cannot steal it. Retryable failure kind is only `ARTIFACT_IO`, `REPORT_RENDER`, `STORAGE_COMMIT`, `OWNER_INTERRUPTED` and must clear ownership.
 
-- 입력 collection을 순회하기 전 정렬 기준을 명시한다.
-- 모든 random 호출은 전달받은 seed에서 파생한다.
-- canonical JSON은 UTF-8, key sort, 명시적 null, compact separator를 사용한다.
-- NaN과 Infinity는 영속·API model에서 금지한다.
-- 수익률 합성, 비용, position, cash의 회계 invariant를 각 engine step에서 검증한다.
-- 병렬 연산 순서가 결과를 바꾸면 결과를 안정 정렬하거나 결정론적 reduction을 사용한다.
-- numeric tolerance는 test에 이름 있는 constant로 정의한다.
+Normal publish uses one transaction with matching PREPARING/token/epoch/version predicate. It inserts JSON/HTML report metadata and links, exactly one pass RegistryEntry, `PUBLISHED` state/event and exact owner job `RUNNING→SUCCEEDED` with immutable result reference. All commit or all rollback. Do not separately “finish the job” after publication.
 
-## 12. LLM 규칙
+Public query code joins the fixed PUBLISHED aggregate only; it cannot accept a caller-provided status filter. Rejections and intermediate candidates are stored append-only in an internal registry/query surface, never public results. Internal views still redact sealed data.
 
-LLM이 수행할 수 있다.
+At process startup, unconditionally mark every persisted `RUNNING` job `FAILED` with `AF-JOB-INTERRUPTED`; do not auto-resume a stage. Release a PREPARING publication owned by that failed job as `FAILED_RETRYABLE/OWNER_INTERRUPTED` with typed owner events. A PUBLISHED row stays PUBLISHED while any legacy RUNNING job becomes FAILED, never SUCCEEDED. Completed fingerprints, consumed slots, accepted artifacts and PUBLISHED rows are immutable.
 
-- 구조화된 질문·가설·전략 후보 생성
-- 근거 요약과 실패기억 비교
-- 허용된 reason code에 대한 설명 작성
+## 11. Error handling, logging and review
 
-LLM이 수행할 수 없다.
+domain/application has no HTTP status knowledge. adapters map typed errors to [API §11](./04_API.md#11-error-code-and-cli-mapping). `except Exception` is allowed only at job/application boundary to persist a typed failure then re-raise/map; it must not conceal success. Do not auto-correct user input.
 
-- SQL, Python, shell 실행
-- 상태 전이, 예산 차감, Registry 등록
-- 데이터·engine 존재 여부 최종 판정
-- validation 결과 변경
-- sealed holdout 조회
-- 누락 config 추정
+Structured logs include correlation/job/request hash, attempt ordinal, search run/generation/slot/trial, publication ID, stage, duration and error code. Never log credentials, tokens, raw prompt/response, dataset row, sealed selector or sealed detail. Provider log may include provider/model, prompt hash, schema version, token count, duration and status.
 
-모든 출력은 provider SDK object를 제거한 plain JSON으로 변환하고 schema 검증 후 사용한다.
+Tests use fake providers and fixed time/UUID/seed. Add contract vectors for canonical bytes/digests and mutation coverage; focused fault/race tests for every write-ahead cut, live-expiry behavior, accepted replay, parent-pool freeze, first-winner cutoff, all PBO set/fold branches, pre-read holdout consumption, no-feedback imports, publication/job atomicity and blanket RUNNING→FAILED restart. Use independent small numerical oracles and cross-OS golden results where applicable.
 
-## 13. Database와 Artifact 코드
-
-- transaction은 application use case 단위로 짧게 유지한다.
-- SQL 문자열을 domain/application module에 작성하지 않는다.
-- repository 조회는 정렬 순서를 명시한다.
-- optimistic update는 `WHERE id=? AND row_version=?`를 사용한다.
-- migration 없이 runtime에서 schema를 생성하거나 변경하지 않는다.
-- artifact는 임시 쓰기 → hash 검증 → atomic rename → DB commit 순서를 지킨다.
-- path에 사용자 입력을 직접 연결하지 않는다.
-
-## 14. Testing 규칙
-
-- bug fix는 실패 재현 test를 먼저 추가한다.
-- 순수 계산은 unit test, port 구현은 integration test, 공개 schema는 contract test로 검증한다.
-- snapshot은 큰 JSON 전체보다 안정된 schema·핵심 field에 사용한다.
-- test는 실제 외부 LLM과 인터넷에 의존하지 않는다.
-- 시간, UUID, seed는 fixture에서 고정한다.
-- 수치 test는 독립 oracle 또는 손계산 가능한 작은 dataset을 사용한다.
-- Test ID와 범위는 [07_TestPlan.md](./07_TestPlan.md)를 따른다.
-
-## 15. 코드 리뷰 규칙
-
-PR 본문 필수 항목:
-
-```text
-Requirements: FR-xxx, AC-xxx
-Contracts: API section / table / ADR
-Tests: UT-xxx, CT-xxx, IT-xxx, E2E-xxx
-Data or migration impact: none | description
-LLM boundary impact: none | description
-```
-
-Reviewer는 다음을 확인한다.
-
-- 권위 문서와 구현 일치
-- 새 optional field로 도메인 차이를 숨기지 않음
-- LLM 출력이 validation을 우회하지 않음
-- 시간 누수와 비용·회계 invariant
-- retry와 예외가 중복 side effect를 만들지 않음
-- log와 artifact에 민감정보가 없음
-- 변경된 공개 계약의 consumer test 존재
-
-작성자와 Reviewer가 같은 AI일 수 없다. 사람이 최종 merge 책임을 가진다.
-
-## 16. Git과 문서
-
-- commit은 실행 가능한 한 가지 변경을 표현한다.
-- generated file은 원본과 같은 commit에 포함한다.
-- `.mmd` 수정 시 대응 `.svg`를 재생성한다.
-- migration, API schema, test fixture의 version을 임의로 덮어쓰지 않는다.
-- 제거된 기능은 코드·테스트·문서·example에서 함께 제거한다.
-
-## 17. 금지 패턴
-
-- 한 class가 orchestration, DB, LLM, engine 계산을 모두 담당
-- domain payload를 `dict[str, Any]`로 전달
-- 모든 도메인을 optional field가 많은 하나의 model로 통합
-- 사용자 config를 “현실적” 값으로 자동 변경
-- 성공 metric만 저장하고 실패 후보를 삭제
-- sealed 결과를 prompt나 다음 후보 생성에 포함
-- broad exception을 무시하고 성공 상태 반환
-- test에서 network, wall clock, random default 사용
+PR review confirms the changed contract/ADR, resource hash coverage, migration impact, race/fault test, public/internal visibility, no sealed feedback, and removal of obsolete code/docs/examples. A reviewer and author cannot be the same AI; a human owns final merge.

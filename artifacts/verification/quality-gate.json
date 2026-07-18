@@ -1,0 +1,77 @@
+{
+  "architectReview": {
+    "architectureStatus": "CLEAR",
+    "productStatus": "CLEAR",
+    "codeStatus": "CLEAR",
+    "recommendation": "APPROVE",
+    "evidence": "agent://120-FinalArchitectureCurrent approved the frozen 506-test Windows/Linux state across architecture, product, and code; agent://122-FinalCleanerRanking reported CLEAN with zero blocking or advisory findings after full-vector ranking hardening.",
+    "commands": ["agent://120-FinalArchitectureCurrent", "agent://122-FinalCleanerRanking", "agent://92-FinalCleanCore through agent://99-FinalCleanOperations"],
+    "blockers": []
+  },
+  "executorQa": {
+    "status": "passed",
+    "e2eStatus": "passed",
+    "redTeamStatus": "passed",
+    "evidence": "agent://123-FinalExecutorQaCurrent reports CLEAN: 506 tests pass on Windows and Linux, focused coverage is 87.51%, performance and CLI/parity suites pass, and all adversarial contract rows are covered.",
+    "e2eCommands": [
+      "uv run --locked --no-sync pytest -q --junitxml=artifacts/verification/full-suite.xml",
+      "UV_PROJECT_ENVIRONMENT=/tmp/alpha-foundry-wsl-venv uv run --locked --no-sync pytest -q --junitxml=artifacts/verification/full-suite-linux.xml",
+      "uv run --locked --no-sync pytest -q tests/e2e/test_cli.py tests/e2e/test_interface_parity.py --junitxml=artifacts/verification/cli-suite.xml"
+    ],
+    "redTeamCommands": [
+      "uv run --locked --no-sync pytest -q",
+      "uv run --locked --no-sync pytest -q --cov=alpha_foundry.domain --cov=alpha_foundry.labs.registry --cov=alpha_foundry.search --cov=alpha_foundry.validation --cov-report=term --cov-fail-under=85",
+      "uv run --locked --no-sync pytest -q tests/performance"
+    ],
+    "artifactRefs": [
+      {"id": "full-suite-windows", "kind": "api-package-algorithm-test-report", "path": "artifacts/verification/full-suite.xml", "description": "Windows JUnit: 506 passed"},
+      {"id": "full-suite-linux", "kind": "api-package-algorithm-test-report", "path": "artifacts/verification/full-suite-linux.xml", "description": "Linux JUnit: 506 passed"},
+      {"id": "cross-os-report", "kind": "algorithm-test-report", "path": "artifacts/verification/cross-os.json", "description": "Same locked suite passed on Windows and Linux"},
+      {"id": "cli-suite-junit", "kind": "cli-test-report", "path": "artifacts/verification/cli-suite.xml", "description": "Focused CLI and REST/CLI parity: 3 passed"},
+      {"id": "cli-safe-replay", "kind": "cli-command-replay-artifact", "path": "artifacts/verification/cli-safe-replay.json", "description": "Allowlisted deterministic argv replay supporting the product CLI JUnit evidence"},
+      {"id": "traceability-report", "kind": "test-report", "path": "artifacts/verification/traceability.json", "description": "Requirements-plan-test traceability checker passed"},
+      {"id": "static-gates-report", "kind": "test-report", "path": "artifacts/verification/static-gates.json", "description": "Locks, lint, typing, docs, architecture, OpenAPI, and Mermaid gates passed"}
+    ],
+    "contractCoverage": [
+      {"id": "typed-engines", "contractRef": "AC-005, AC-006, AC-010, AC-011", "obligation": "Typed JSON DSL/compiler and eight domain-owned numerical engines with explicit policies", "status": "covered", "surfaceEvidenceRefs": ["algorithm-surface"], "adversarialCaseRefs": ["invalid-inputs"]},
+      {"id": "finite-search", "contractRef": "AC-007, AC-008, AC-009, AC-014, AC-021", "obligation": "Finite deterministic search, exact trial ledger, profile-owned ranking, and cross-OS identity", "status": "covered", "surfaceEvidenceRefs": ["algorithm-surface", "cross-os-surface"], "adversarialCaseRefs": ["determinism", "invalid-inputs", "crash-restart"]},
+      {"id": "validation-holdout", "contractRef": "AC-012, AC-013, AC-015", "obligation": "Purged walk-forward, exact PBO, and automatic atomic one-shot sealed holdout", "status": "covered", "surfaceEvidenceRefs": ["math-surface", "persistence-surface"], "adversarialCaseRefs": ["invalid-inputs", "sealed-leakage", "crash-restart"]},
+      {"id": "publication", "contractRef": "AC-016, AC-017, AC-019", "obligation": "Atomic publication, PUBLISHED-only visibility, reason-coded rejections, redacted JSON/HTML reports", "status": "covered", "surfaceEvidenceRefs": ["api-surface", "persistence-surface"], "adversarialCaseRefs": ["sealed-leakage", "crash-restart"]},
+      {"id": "knowledge-generation", "contractRef": "AC-001, AC-002, AC-003, AC-004", "obligation": "Immutable knowledge, ordered snapshotted LLM attempts, durable ownership, and zero-call replay", "status": "covered", "surfaceEvidenceRefs": ["api-surface", "persistence-surface"], "adversarialCaseRefs": ["generation-replay", "crash-restart"]},
+      {"id": "interfaces-jobs", "contractRef": "AC-018, AC-020", "obligation": "REST/CLI parity, idempotency, cancellation, single-worker restart failure, and resubmission", "status": "covered", "surfaceEvidenceRefs": ["api-surface", "cli-surface", "persistence-surface"], "adversarialCaseRefs": ["cli-parity", "crash-restart"]},
+      {"id": "authority-traceability", "contractRef": "FR-SCOPE-001 and normative 21-row mapping", "obligation": "Correct authority docs, no composition, and complete requirements-to-test traceability", "status": "covered", "surfaceEvidenceRefs": ["package-surface"], "adversarialCaseRefs": ["invalid-inputs"]}
+    ],
+    "surfaceEvidence": [
+      {"id": "api-surface", "contractRef": "AC-001 through AC-004 and AC-016 through AC-020", "surface": "api", "invocation": "Windows/Linux full JUnit REST E2E", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "cli-surface", "contractRef": "AC-018 and AC-020", "surface": "cli", "invocation": "alpha-foundry CLI E2E/parity plus allowlisted argv replay", "verdict": "passed", "artifactRefs": ["cli-suite-junit", "cli-safe-replay"]},
+      {"id": "algorithm-surface", "contractRef": "AC-005 through AC-011 and AC-014/AC-021", "surface": "algorithm", "invocation": "Cross-platform DSL/compiler/engine/search property and adversarial suite", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux", "cross-os-report"]},
+      {"id": "math-surface", "contractRef": "AC-012 and AC-013", "surface": "math", "invocation": "Walk-forward leakage and hand-oracle PBO suite", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "persistence-surface", "contractRef": "AC-003, AC-004, AC-009, AC-015 through AC-020", "surface": "package", "invocation": "SQLite/CAS ownership, recovery, holdout, publication, and resubmission suite", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "cross-os-surface", "contractRef": "AC-021", "surface": "algorithm", "invocation": "Same locked 506-test suite on Windows 11 and WSL2 Ubuntu", "verdict": "passed", "artifactRefs": ["cross-os-report"]},
+      {"id": "package-surface", "contractRef": "All FR/AC authority and architecture boundaries", "surface": "package", "invocation": "Static, docs, traceability, OpenAPI, Mermaid, lock, typing, and architecture gates", "verdict": "passed", "artifactRefs": ["traceability-report", "static-gates-report"]}
+    ],
+    "adversarialCases": [
+      {"id": "determinism", "contractRef": "AC-007, AC-008, AC-014, AC-021", "scenario": "Ambient Decimal changes, malformed later ranking fields, same-seed reruns, and finite stop precedence", "expectedBehavior": "Profile-owned deterministic results or fail-closed rejection on both operating systems", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux", "cross-os-report"]},
+      {"id": "invalid-inputs", "contractRef": "AC-005, AC-006, AC-010 through AC-014", "scenario": "Missing policies/capabilities, generated code, stale gates, unquantized or nonfinite scores, and tampered PBO/profile evidence", "expectedBehavior": "Reason-coded deterministic rejection without invented data or fallback masking", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "crash-restart", "contractRef": "AC-003, AC-009, AC-015, AC-016, AC-020", "scenario": "Generation/trial/publication/holdout interruption and process restart", "expectedBehavior": "Write-ahead authority remains auditable, RUNNING jobs fail, consumed holdout stays closed, and resubmission uses a new lineage", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "sealed-leakage", "contractRef": "AC-015, AC-016, AC-019", "scenario": "Second holdout read, reconstructive disclosure, sealed rows in reports, or reporting-to-research feedback", "expectedBehavior": "Access and publication fail closed; only allowed aggregates are visible", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "generation-replay", "contractRef": "AC-003 and AC-004", "scenario": "Accepted and unaccepted generation replay, provider failure, and ownership transfer", "expectedBehavior": "Accepted artifacts replay with zero provider calls; invalid replay never calls a provider", "verdict": "passed", "artifactRefs": ["full-suite-windows", "full-suite-linux"]},
+      {"id": "cli-parity", "contractRef": "AC-018 and AC-020", "scenario": "CLI/API idempotency mismatch, cancellation, forbidden routes, and public/internal visibility mismatch", "expectedBehavior": "Shared commands remain equivalent and forbidden/private surfaces remain inaccessible", "verdict": "passed", "artifactRefs": ["cli-suite-junit", "full-suite-windows", "full-suite-linux"]}
+    ],
+    "blockers": []
+  },
+  "iteration": {
+    "status": "passed",
+    "evidence": "The cleaner-reported ranking blockers were fixed at their source; the complete static, Windows, Linux, coverage, performance, CLI, architecture, cleaner, and executor QA loop was rerun against the frozen final state with no blockers.",
+    "fullRerun": true,
+    "rerunCommands": [
+      "uv run --locked --no-sync ruff format --check . && uv run --locked --no-sync ruff check . && uv run --locked --no-sync mypy src",
+      "uv run --locked --no-sync pytest -q --junitxml=artifacts/verification/full-suite.xml",
+      "UV_PROJECT_ENVIRONMENT=/tmp/alpha-foundry-wsl-venv uv run --locked --no-sync pytest -q --junitxml=artifacts/verification/full-suite-linux.xml",
+      "uv run --locked --no-sync pytest -q --cov=alpha_foundry.domain --cov=alpha_foundry.labs.registry --cov=alpha_foundry.search --cov=alpha_foundry.validation --cov-report=term --cov-fail-under=85",
+      "uv run --locked --no-sync pytest -q tests/performance",
+      "uv run --locked --no-sync pytest -q tests/e2e/test_cli.py tests/e2e/test_interface_parity.py --junitxml=artifacts/verification/cli-suite.xml"
+    ],
+    "blockers": []
+  }
+}
